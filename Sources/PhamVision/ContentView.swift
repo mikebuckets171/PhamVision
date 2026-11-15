@@ -146,6 +146,8 @@ private struct ScanningView: View {
         switch progress.stage {
         case .opening:
             return "Opening the recording…"
+        case .converting:
+            return "Getting the recording ready… \(Int(progress.stageFraction * 100))%"
         case .reading:
             return "Reading your stat line… \(Int(progress.overall * 100))%"
         case .clocks(let done, let total):
@@ -240,7 +242,7 @@ private struct ResultsView: View {
             footer
         }
         .sheet(isPresented: Binding(get: { previewing != nil }, set: { if !$0 { previewing = nil } })) {
-            if let video = model.video {
+            if let video = model.playable ?? model.video {
                 ClipPreview(video: video, clips: model.clips, current: $previewing, selection: $selection)
             }
         }

@@ -52,8 +52,8 @@ Tools that clip on loud audio fire on every crowd roar and miss the quiet dimes.
 
 ## How to use it
 
-1. **Record your session** as usual. PhamVision needs an **MP4 or MOV** file; macOS can't read MKV.
-   If your recorder makes MKV files, either keep converting to MP4 as you do now, or open the MKV in LosslessCut and export it as MP4. That only re-packages the video, so it takes seconds.
+1. **Record your session** as usual. **MP4, MOV and MKV** all work, so there's no need to convert MKV recordings first.
+   For MKV, PhamVision makes a temporary MP4 copy while it scans (no re-encoding, so it's quick and lossless) and deletes it afterwards. It needs LosslessCut installed for this, and free disk space about the size of the recording.
 2. **Drop the recording** onto the PhamVision window, or onto its Dock icon.
 3. **Wait a few minutes.** On an M5 Pro, an 89-minute recording takes about 2½ minutes. A 5-hour stream takes roughly 10–20 minutes, depending on your Mac.
 4. **Check the list.** Filter by points, assists, rebounds or highlights, double-click any clip to watch it, and change how much footage each clip keeps. Your settings are remembered.
@@ -77,6 +77,7 @@ plays ──► clips (12 s before, 3 s after, merged) ──► LosslessCut pro
 - **Ignoring noise.** A change only counts once it's been read on consecutive frames, so a single bad frame never becomes a clip. When 2K hides the HUD for a replay after a basket, the play is placed at the moment the HUD disappeared, which is when the shot went in.
 - **Splitting games.** A new game starts when all your stats reset to zero, or when the quarter on the scoreboard goes backwards.
 - **Reading the feed and clock.** Free text like "Steal: +2" and "4th 0:57" goes through Apple's on-device text recognition.
+- **Reading MKV.** macOS can't open MKV, so PhamVision borrows the ffmpeg that ships inside LosslessCut to copy the video into a temporary MP4, scans that, and still points LosslessCut at your original file.
 - **Handing off.** The results are written as `<recording>-proj.llc` next to your video, the project file LosslessCut opens automatically.
 
 ### Tested on
@@ -100,7 +101,7 @@ The digit templates were built from the first session only, so the second sessio
 | Game | NBA 2K27, default player HUD position |
 | Modes | Tested in The Rec. Other modes that show the same player HUD should work; please [report](https://github.com/mikebuckets171/PhamVision/issues/new/choose) any that don't |
 | Resolutions | 720p to 4K, any 16:9. Tested on a native 1080p recording, plus the same footage rescaled to 720p, 1440p and 4K, which found identical plays |
-| Files | MP4, MOV, M4V. Not MKV (macOS can't read it) |
+| Files | MP4, MOV, M4V directly. MKV, FLV and TS through a temporary copy, which needs LosslessCut (or Homebrew ffmpeg) installed. Video must be H.264 or HEVC |
 | Macs | macOS 14 Sonoma or later, Apple Silicon or Intel |
 
 ## Command line
@@ -152,7 +153,6 @@ Each label is `seconds:PTS,REB,AST`. Between them, the frames need to cover ever
 
 ## Roadmap
 
-- MKV support without converting first
 - Ranking clips, so dunks and game-winners float to the top
 - Teammate highlights (assists you threw, buckets you set up)
 - Notarised builds

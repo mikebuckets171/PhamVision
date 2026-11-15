@@ -95,13 +95,21 @@ do {
         // pv clips <video> [--before S] [--after S] [--csv 1]
         // The whole pipeline: scan, detect, label, and write the LosslessCut project next to the video.
         let started = Date()
-        let info = try await VideoSampler(url: url).info()
-        let samples = try await VideoScanner().scan(url) { p in
+        // MKV and similar are re-packaged into a temporary MP4 first (no re-encoding).
+        var source = url
+        if Remuxer.needsRemux(url) {
+            guard let ffmpeg = Remuxer.findFFmpeg() else { throw Remuxer.RemuxError.ffmpegNotFound }
+            stderr("Preparing \(url.pathExtension.uppercased()) with \(ffmpeg.path)")
+            source = try await Remuxer.remux(url, ffmpeg: ffmpeg)
+        }
+        defer { if source != url { try? FileManager.default.removeItem(at: source) } }
+        let info = try await VideoSampler(url: source).info()
+        let samples = try await VideoScanner().scan(source) { p in
             FileHandle.standardError.write(Data(String(format: "\rScanning %3.0f%%", p * 100).utf8))
         }
         stderr("")
         var plays = PlayDetector().detect(samples)
-        for (index, clock) in await GameClock.read(url, at: plays.map(\.time)) { plays[index].clock = clock }
+        for (index, clock) in await GameClock.read(source, at: plays.map(\.time)) { plays[index].clock = clock }
         PlayDetector.splitGamesByClock(&plays)
         var settings = ClipSettings()
         if let b = option("--before") { settings.before = b }

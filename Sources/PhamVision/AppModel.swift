@@ -27,6 +27,8 @@ final class AppModel {
     struct ScanProgress: Equatable {
         enum Stage: Equatable {
             case opening
+            /// Re-packaging an MKV (or similar) into an MP4 macOS can read.
+            case converting
             case reading
             case clocks(done: Int, total: Int)
         }
@@ -40,6 +42,8 @@ final class AppModel {
         var stageStarted: Date
         var stageFraction: Double = 0
         var updated: Date
+        /// Share of the bar given to converting; zero for files that don't need it.
+        var convertShare = 0.0
 
         init(started: Date) {
             self.started = started
@@ -51,7 +55,8 @@ final class AppModel {
         var overall: Double {
             switch stage {
             case .opening: return 0
-            case .reading: return stageFraction * Self.readingShare
+            case .converting: return stageFraction * convertShare
+            case .reading: return convertShare + stageFraction * (Self.readingShare - convertShare)
             case .clocks: return Self.readingShare + (1 - Self.readingShare) * stageFraction
             }
         }
@@ -105,6 +110,11 @@ final class AppModel {
     private(set) var phase: Phase = .idle
     private(set) var progress: ScanProgress?
     private(set) var video: URL?
+    /// The file macOS can actually play: the recording itself, or a temporary
+    /// MP4 copy when the recording is an MKV. Used for scanning and previews;
+    /// LosslessCut always gets the original.
+    private(set) var playable: URL?
+    private var temporaryFile: URL?
     private(set) var duration: Double = 0
     private(set) var plays: [Play] = []
     private(set) var scanSeconds: Double = 0
@@ -154,7 +164,7 @@ final class AppModel {
         panel.allowedContentTypes = Self.videoTypes
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
-        panel.message = "Choose the recording of your stream (MP4 or MOV)"
+        panel.message = "Choose the recording of your stream (MP4, MOV or MKV)"
         panel.prompt = "Scan"
         if panel.runModal() == .OK, let url = panel.url { open(url) }
     }
@@ -293,14 +303,43 @@ final class AppModel {
         task = nil
         progress = nil
         endLongWork()
+        playable = nil
+        if let temporaryFile { try? FileManager.default.removeItem(at: temporaryFile) }
+        temporaryFile = nil
     }
 
-    private func runScan(_ url: URL, id: Int, started: Date) async {
+    /// For an MKV or similar, makes a temporary MP4 copy (no re-encoding) and
+    /// returns it; other recordings are returned as they are.
+    private func playableCopy(of url: URL, id: Int) async throws -> URL {
+        guard Remuxer.needsRemux(url) else { return url }
+        guard let ffmpeg = Remuxer.findFFmpeg(losslessCut: losslessCutURL) else {
+            throw Remuxer.RemuxError.ffmpegNotFound
+        }
+        progress?.convertShare = 0.08
+        progress?.begin(.converting)
+        let copy = try await Remuxer.remux(url, ffmpeg: ffmpeg) { fraction in
+            Task { @MainActor in
+                guard id == self.scanID, self.progress?.stage == .converting else { return }
+                self.progress?.advance(fraction)
+                DockProgress.show(self.progress?.overall ?? 0)
+            }
+        }
+        guard id == scanID, !Task.isCancelled else {
+            try? FileManager.default.removeItem(at: copy)
+            throw CancellationError()
+        }
+        temporaryFile = copy
+        return copy
+    }
+
+    private func runScan(_ original: URL, id: Int, started: Date) async {
         var opened = false
         do {
+            let url = try await playableCopy(of: original, id: id)
             let info = try await VideoSampler(url: url).info()
             guard id == scanID else { return }
             opened = true
+            playable = url
             duration = info.duration
             progress?.begin(.reading)
 
@@ -331,7 +370,7 @@ final class AppModel {
             progress = nil
             phase = .done
             endLongWork()
-            let name = url.lastPathComponent
+            let name = original.lastPathComponent
             Attention.finished(
                 title: found.isEmpty ? "No plays found" : "Scan finished",
                 body: found.isEmpty
@@ -341,7 +380,7 @@ final class AppModel {
             )
         } catch {
             guard id == scanID, !Task.isCancelled, !(error is CancellationError) else { return }
-            let failure = Self.describe(error, reading: url, opened: opened)
+            let failure = Self.describe(error, reading: original, opened: opened)
             progress = nil
             phase = .failed(failure)
             endLongWork()
@@ -432,6 +471,28 @@ final class AppModel {
         }
         let unfinished = "This usually means the recording didn't finish saving, for example because the recorder "
             + "or the Mac stopped unexpectedly. Check whether it plays in QuickTime Player."
+        if let error = error as? Remuxer.RemuxError {
+            let kind = url.pathExtension.uppercased()
+            switch error {
+            case .ffmpegNotFound:
+                return Failure(
+                    title: "\(kind) files need LosslessCut installed",
+                    message: error.errorDescription ?? "",
+                    canRetry: true,
+                    needsConverting: true
+                )
+            case .notEnoughSpace:
+                return Failure(title: "Not enough free disk space", message: error.errorDescription ?? "", canRetry: true)
+            case .unsupportedVideo:
+                return Failure(title: "This recording's video format isn't supported", message: error.errorDescription ?? "")
+            case .failed:
+                return Failure(
+                    title: "This \(kind) file couldn't be read",
+                    message: (error.errorDescription ?? "") + "\n\n" + unfinished,
+                    canRetry: true
+                )
+            }
+        }
         if let error = error as? VideoSampler.SamplerError {
             switch error {
             case .unsupportedFormat(let ext) where ["mp4", "mov", "m4v"].contains(ext):

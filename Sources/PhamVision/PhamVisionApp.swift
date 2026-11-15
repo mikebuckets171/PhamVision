@@ -1,3 +1,4 @@
+import PhamVisionCore
 import SwiftUI
 import UserNotifications
 
@@ -12,6 +13,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillFinishLaunching(_ notification: Notification) {
         // The window is always dark; keep alerts, panels and menus matching.
         NSApp.appearance = NSAppearance(named: .darkAqua)
+        // Temporary MP4 copies of MKV recordings, left over if the app was force-quit.
+        Remuxer.removeLeftovers()
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        Remuxer.removeLeftovers()
     }
 
     func application(_ application: NSApplication, open urls: [URL]) {

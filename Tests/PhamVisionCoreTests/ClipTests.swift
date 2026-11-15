@@ -73,3 +73,36 @@ private func play(_ t: Double, _ kind: PlayKind = .points, game: Int = 1) -> Pla
     let url = LosslessCut.projectURL(for: URL(fileURLWithPath: "/Users/x/Movies/Stream 1.mp4"))
     #expect(url.path == "/Users/x/Movies/Stream 1-proj.llc")
 }
+
+@Test func ffmpegProbeParsing() {
+    let text = """
+    Input #0, matroska,webm, from 'stream.mkv':
+      Duration: 05:12:07.48, start: 0.000000, bitrate: 24012 kb/s
+      Stream #0:0: Video: hevc (Main), yuv420p(tv, bt709), 2560x1440, 60 fps
+      Stream #0:1: Audio: aac (LC), 48000 Hz, stereo, fltp
+    """
+    let probe = Remuxer.parseProbe(text)
+    #expect(probe.videoCodec == "hevc")
+    #expect(probe.audioCodec == "aac")
+    #expect(abs((probe.duration ?? 0) - 18727.48) < 0.01)
+}
+
+@Test func remuxArgumentsCopyStreams() throws {
+    let src = URL(fileURLWithPath: "/tmp/a.mkv"), dst = URL(fileURLWithPath: "/tmp/b.mp4")
+    let hevc = try Remuxer.arguments(source: src, destination: dst, probe: .init(duration: 10, videoCodec: "hevc", audioCodec: "aac"))
+    #expect(hevc.contains("hvc1"))
+    #expect(hevc.contains("0:a:0"))
+    #expect(!hevc.contains("libx264"))
+    // Opus can't go in an MP4 that QuickTime plays, so the copy is silent.
+    let opus = try Remuxer.arguments(source: src, destination: dst, probe: .init(duration: 10, videoCodec: "h264", audioCodec: "opus"))
+    #expect(!opus.contains("0:a:0"))
+    #expect(!opus.contains("hvc1"))
+    #expect(throws: Remuxer.RemuxError.unsupportedVideo("vp9")) {
+        try Remuxer.arguments(source: src, destination: dst, probe: .init(duration: 10, videoCodec: "vp9", audioCodec: nil))
+    }
+}
+
+@Test func onlyUnreadableContainersAreRemuxed() {
+    #expect(Remuxer.needsRemux(URL(fileURLWithPath: "/x/Stream.MKV")))
+    #expect(!Remuxer.needsRemux(URL(fileURLWithPath: "/x/stream.mp4")))
+}

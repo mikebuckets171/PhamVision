@@ -32,12 +32,6 @@ public struct VideoSampler: Sendable {
             switch self {
             case .noVideoTrack:
                 return "This file has no video track PhamVision can read."
-            case .unsupportedFormat(let ext) where ext == "mkv":
-                return """
-                macOS can't read MKV files. Scan the MP4 version of this recording instead. \
-                To make one without losing quality, open the MKV in LosslessCut, set the output format to MP4 \
-                and export the whole file; it only re-packages the video, so it takes seconds.
-                """
             case .unsupportedFormat(let ext):
                 return "macOS can't read .\(ext) files. Convert the recording to MP4 or MOV and scan that."
             case .cannotRead(let reason):
