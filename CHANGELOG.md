@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.1
+
+- Steals and blocks at the start of a game are now numbered with that game instead of the previous one.
+- Builds on Xcode 16 as well as newer toolchains.
+
 ## 0.1.0
 
 First release.

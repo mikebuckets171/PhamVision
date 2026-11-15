@@ -103,3 +103,12 @@ private func hold(_ p: Int?, _ r: Int?, _ a: Int?, _ n: Int) -> [(Int?, Int?, In
     samples[5].feed = ["Shot Blocker", "Handles for Days", "Good Pass"]
     #expect(PlayDetector().detect(samples).isEmpty)
 }
+
+@Test func feedPlayAfterNewGameStartsGetsNewGameNumber() {
+    // Game 1 ends at 10 PTS; game 2 starts (all zeros), a steal happens, then a basket.
+    var samples = timeline(hold(8, 0, 0, 4) + hold(10, 0, 0, 100) + hold(0, 0, 0, 100) + hold(2, 0, 0, 4))
+    for i in 150...155 { samples[i].feed = ["Steal: +2"] }
+    let plays = PlayDetector().detect(samples)
+    #expect(plays.map(\.kind) == [.points, .feed, .points])
+    #expect(plays.map(\.game) == [1, 2, 2])
+}

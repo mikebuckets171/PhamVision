@@ -81,15 +81,17 @@ plays ──► clips (12 s before, 3 s after, merged) ──► LosslessCut pro
 
 ### Tested on
 
-An 89-minute Rec session (1080p60) containing three full games:
+Two Rec sessions recorded at 1080p60, checked against the HUD at the end of every game:
 
-| | Result |
-|---|---|
-| Games found | 3 of 3 |
-| Stat changes found | every PTS, REB and AST change in all three games |
-| Steals from the feed | 6 |
-| Clips produced | 66 |
-| Time to scan | 142 s on an M5 Pro (about 38× real time) |
+| | Session 1 (89 min) | Session 2 (69 min) |
+|---|---|---|
+| Games found | 3 of 3 | 2 of 2 |
+| Stat changes found | every PTS, REB and AST change | every PTS, REB and AST change |
+| Steals and blocks from the feed | 6 | 3 |
+| Final stats match the HUD | yes | yes |
+| Time to scan, M5 Pro | 142 s | 156 s |
+
+The digit templates were built from the first session only, so the second session is unseen footage.
 
 ## Supported
 

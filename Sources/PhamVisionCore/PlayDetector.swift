@@ -97,8 +97,11 @@ public struct PlayDetector: Sendable {
         ]
         var plays: [Play] = []
         var game = 1
+        /// When each game after the first began, for numbering feed plays.
+        var gameStarts: [(time: Double, game: Int)] = []
         var sawPlayThisGame = false
         var resetCount = 0
+        var resetSince = 0.0
 
         for sample in samples {
             guard let stats = sample.stats else { continue }
@@ -108,9 +111,13 @@ public struct PlayDetector: Sendable {
             let known = trackers.compactMap(\.value)
             if let p = readings[0], let r = readings[1], let a = readings[2],
                p + r + a <= newGameMaxTotal, known.count == 3, known.reduce(0, +) > newGameMaxTotal {
+                if resetCount == 0 { resetSince = sample.time }
                 resetCount += 1
                 if resetCount >= resyncConfirmations {
-                    if sawPlayThisGame { game += 1 }
+                    if sawPlayThisGame {
+                        game += 1
+                        gameStarts.append((resetSince, game))
+                    }
                     sawPlayThisGame = false
                     for i in trackers.indices {
                         trackers[i].value = readings[i]
@@ -166,7 +173,7 @@ public struct PlayDetector: Sendable {
             }
         }
 
-        plays.append(contentsOf: feedPlays(samples, statPlays: plays))
+        plays.append(contentsOf: feedPlays(samples, gameStarts: gameStarts))
         plays.sort { $0.time < $1.time }
         for i in plays.indices { plays[i].id = i + 1 }
         return plays
@@ -236,7 +243,7 @@ public struct PlayDetector: Sendable {
         return phrases.first { normalized.contains($0.needle) }
     }
 
-    private func feedPlays(_ samples: [Sample], statPlays: [Play]) -> [Play] {
+    private func feedPlays(_ samples: [Sample], gameStarts: [(time: Double, game: Int)]) -> [Play] {
         guard !feedHighlights.isEmpty else { return [] }
         var result: [Play] = []
         var lastSeen: [String: Double] = [:]
@@ -248,7 +255,9 @@ public struct PlayDetector: Sendable {
                 lastSeen[phrase.label] = sample.time
                 guard fresh else { continue }
                 let time = max(0, sample.time - feedLagSeconds)
-                let game = statPlays.last { $0.time <= time }?.game ?? 1
+                // The stats reset shortly after tip-off, so allow a minute of slack:
+                // a feed play just before a reset already belongs to the new game.
+                let game = gameStarts.last { $0.time <= time + 60 }?.game ?? 1
                 result.append(Play(id: 0, time: time, kind: .feed, detail: phrase.label, game: game))
             }
         }
