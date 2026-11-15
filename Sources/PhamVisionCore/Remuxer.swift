@@ -74,7 +74,10 @@ public enum Remuxer {
     public static func parseProbe(_ text: String) -> Probe {
         var probe = Probe()
         if let m = text.firstMatch(of: /Duration: (\d+):(\d\d):(\d\d(?:\.\d+)?)/) {
-            probe.duration = (Double(m.1) ?? 0) * 3600 + (Double(m.2) ?? 0) * 60 + (Double(m.3) ?? 0)
+            let hours: Double = Double(m.1) ?? 0
+            let minutes: Double = Double(m.2) ?? 0
+            let seconds: Double = Double(m.3) ?? 0
+            probe.duration = hours * 3600 + minutes * 60 + seconds
         }
         if let m = text.firstMatch(of: /Stream #[^\n]*?Video: (\w+)/) { probe.videoCodec = String(m.1).lowercased() }
         if let m = text.firstMatch(of: /Stream #[^\n]*?Audio: (\w+)/) { probe.audioCodec = String(m.1).lowercased() }
