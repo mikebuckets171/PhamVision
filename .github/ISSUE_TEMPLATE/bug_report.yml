@@ -1,0 +1,31 @@
+name: Bug report
+description: A play was missed, a clip is wrong, or the app misbehaved
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What you expected, and what PhamVision did instead.
+    validations:
+      required: true
+  - type: input
+    id: timestamp
+    attributes:
+      label: Where in the recording?
+      description: Timestamp(s) of the missed or wrong play, e.g. 1:12:40.
+  - type: textarea
+    id: screenshot
+    attributes:
+      label: Screenshot of the HUD
+      description: A full-resolution screenshot of the frame helps more than anything else. Drag it in here.
+  - type: input
+    id: recording
+    attributes:
+      label: Recording
+      description: Resolution, frame rate and format (e.g. 1440p60 MP4), and the game mode (Rec, Park, Pro-Am, MyCareer).
+  - type: input
+    id: mac
+    attributes:
+      label: Mac and macOS version
+      placeholder: MacBook Pro M3, macOS 26.1
