@@ -1,4 +1,4 @@
-import AVFoundation
+@preconcurrency import AVFoundation
 import CoreVideo
 
 /// Decodes a video front to back and hands every Nth frame to a callback.
