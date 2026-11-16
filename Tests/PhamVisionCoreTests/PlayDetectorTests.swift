@@ -112,3 +112,41 @@ private func hold(_ p: Int?, _ r: Int?, _ a: Int?, _ n: Int) -> [(Int?, Int?, In
     #expect(plays.map(\.kind) == [.points, .feed, .points])
     #expect(plays.map(\.game) == [1, 2, 2])
 }
+
+@Test func gamesThatAddUpCheckOut() {
+    let samples = timeline(hold(0, 0, 0, 4) + hold(2, 0, 0, 6) + hold(2, 0, 1, 6) + hold(5, 0, 1, 6))
+    let detection = PlayDetector().analyze(samples)
+    #expect(detection.games.count == 1)
+    let game = detection.games[0]
+    #expect(game.checksOut)
+    #expect(game.stats.map(\.expected) == [5, 0, 1])
+    #expect(game.stats.map(\.found) == [5, 0, 1])
+}
+
+@Test func riseDuringLongHiddenStretchIsReportedAsGap() {
+    let hidden: [(Int?, Int?, Int?)?] = Array(repeating: nil, count: 400)
+    let samples = timeline(hold(5, 1, 1, 4) + hidden + hold(7, 1, 1, 8))
+    let detection = PlayDetector().analyze(samples)
+    #expect(detection.plays.isEmpty)
+    let game = detection.games[0]
+    #expect(!game.checksOut)
+    #expect(game.stats[0].missing == 2)
+    #expect(game.gaps.count == 1)
+    #expect(game.gaps[0].from == 5 && game.gaps[0].to == 7)
+    #expect(game.gaps[0].after == 1.5)
+}
+
+@Test func misreadDropAndRecoveryIsNotAGap() {
+    // 13 PTS misread as 5 for long enough to be accepted, then read right again.
+    let samples = timeline(hold(13, 0, 9, 10) + hold(5, 0, 9, 8) + hold(13, 0, 9, 10))
+    let detection = PlayDetector().analyze(samples)
+    #expect(detection.plays.isEmpty)
+    #expect(detection.games.allSatisfy { $0.gaps.isEmpty })
+}
+
+@Test func eachGameGetsItsOwnSummary() {
+    let samples = timeline(hold(0, 0, 0, 4) + hold(3, 0, 0, 200) + hold(0, 0, 0, 6) + hold(0, 0, 1, 4))
+    let detection = PlayDetector().analyze(samples)
+    #expect(detection.games.map(\.title) == ["Game 1", "Game 2"])
+    #expect(detection.games.allSatisfy { $0.checksOut })
+}

@@ -83,7 +83,7 @@ private struct DropView: View {
             Button("Choose File…") { model.chooseFile() }
                 .controlSize(.large)
                 .padding(.top, 4)
-            Text("MP4 or MOV recordings from NBA 2K27")
+            Text("MP4, MOV or MKV recordings from NBA 2K27")
                 .font(.caption)
                 .foregroundStyle(.tertiary)
         }
@@ -226,6 +226,9 @@ private struct ResultsView: View {
     @Environment(AppModel.self) private var model
     @State private var selection: Clip.ID?
     @State private var previewing: Clip.ID?
+    /// What the player steps through: the list, or a single accuracy-check gap.
+    @State private var previewClips: [Clip] = []
+    @State private var showingAccuracy = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -243,8 +246,30 @@ private struct ResultsView: View {
         }
         .sheet(isPresented: Binding(get: { previewing != nil }, set: { if !$0 { previewing = nil } })) {
             if let video = model.playable ?? model.video {
-                ClipPreview(video: video, clips: model.clips, current: $previewing, selection: $selection)
+                ClipPreview(video: video, clips: previewClips, current: $previewing, selection: $selection)
             }
+        }
+        .sheet(isPresented: Binding(get: { model.exportProgress != nil }, set: { _ in })) {
+            ExportProgressView()
+        }
+        .sheet(isPresented: $showingAccuracy) {
+            AccuracyDetails(watch: watch(gap:in:))
+        }
+    }
+
+    private func watch(_ id: Clip.ID) {
+        previewClips = model.shownClips
+        previewing = id
+    }
+
+    private func watch(gap: GameSummary.Gap, in game: GameSummary) {
+        let clip = model.clip(for: gap, in: game)
+        showingAccuracy = false
+        previewClips = [clip]
+        // Let the details sheet close before the player sheet opens.
+        Task {
+            try? await Task.sleep(nanoseconds: 400_000_000)
+            previewing = clip.id
         }
     }
 
@@ -261,6 +286,9 @@ private struct ResultsView: View {
                 Text(summary)
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
+                if !model.gameChecks.isEmpty {
+                    accuracyLine
+                }
             }
             Spacer()
             Button("Scan Another") { model.startOver() }
@@ -273,6 +301,27 @@ private struct ResultsView: View {
         let plays = AppModel.count(model.plays.count, "play")
         let games = AppModel.count(model.games, "game")
         return "\(plays) across \(games) · \(Format.clock(model.duration)) scanned in \(Format.rough(model.scanSeconds))"
+    }
+
+    /// "✓ Accuracy check: all 3 games add up" with a Details popover.
+    private var accuracyLine: some View {
+        let problems = model.gamesWithGaps
+        let total = model.gameChecks.count
+        let text = problems.isEmpty
+            ? (total == 1 ? "Accuracy check: the game adds up" : "Accuracy check: all \(total) games add up")
+            : "Accuracy check: \(AppModel.count(problems.count, "game")) of \(total) \(problems.count == 1 ? "has" : "have") stats with no clip"
+        return HStack(spacing: 6) {
+            Image(systemName: problems.isEmpty ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                .foregroundStyle(problems.isEmpty ? Brand.teal : Brand.orange)
+                .accessibilityHidden(true)
+            Text(text)
+                .font(.subheadline)
+            Button("Details") { showingAccuracy = true }
+                .buttonStyle(.link)
+                .font(.subheadline)
+        }
+        .padding(.top, 2)
+        .help("Compares the plays PhamVision found with how much your stat line went up in each game")
     }
 
     private var emptyState: some View {
@@ -319,6 +368,14 @@ private struct ResultsView: View {
                 }
             }
             Spacer()
+            Picker("Order", selection: $model.bestFirst) {
+                Text("Recording order").tag(false)
+                Text("Best first").tag(true)
+            }
+            .pickerStyle(.menu)
+            .fixedSize()
+            .labelsHidden()
+            .help("Show clips in the order they happened, or the highest-rated first")
             if !model.usesDefaultClipLength {
                 Button {
                     model.resetClipLength()
@@ -347,7 +404,18 @@ private struct ResultsView: View {
     }
 
     private var clipList: some View {
-        Table(model.clips, selection: $selection) {
+        Table(model.shownClips, selection: $selection) {
+            TableColumn("Keep") { clip in
+                Toggle("Keep", isOn: Binding(get: { model.isKept(clip) }, set: { model.setKept(clip, $0) }))
+                    .labelsHidden()
+                    .help("Ticked clips are exported, and selected when opened in LosslessCut")
+                    .accessibilityLabel("Keep clip at \(Format.clock(clip.start))")
+            }
+            .width(34)
+            TableColumn("Rating") { clip in
+                StarsView(count: model.stars[clip.id] ?? 1)
+            }
+            .width(54)
             TableColumn("Time") { clip in
                 Text(Format.clock(clip.start)).monospacedDigit()
             }
@@ -371,7 +439,14 @@ private struct ResultsView: View {
                             .padding(.vertical, 2)
                             .background(play.kind.color.opacity(0.22), in: Capsule())
                     }
+                    if ClipRating.isClutch(clip) {
+                        Text("CLUTCH")
+                            .font(.caption2.weight(.bold))
+                            .foregroundStyle(Brand.orange)
+                            .help("Late in the 4th quarter or overtime with the game close")
+                    }
                 }
+                .opacity(model.isKept(clip) ? 1 : 0.45)
             }
             TableColumn("Length") { clip in
                 Text("\(Int(clip.duration.rounded()))s").monospacedDigit()
@@ -380,13 +455,14 @@ private struct ResultsView: View {
         }
         .contextMenu(forSelectionType: Clip.ID.self) { ids in
             if let id = ids.first, let clip = model.clip(id) {
-                Button("Watch Clip") { previewing = id }
+                Button("Watch Clip") { watch(id) }
+                Button(model.isKept(clip) ? "Untick" : "Tick") { model.setKept(clip, !model.isKept(clip)) }
                 Divider()
                 Button("Copy Time (\(Format.clock(clip.start)))") { model.copy(Format.clock(clip.start)) }
                 Button("Copy Description") { model.copy(clip.label) }
             }
         } primaryAction: { ids in
-            if let id = ids.first { previewing = id }
+            if let id = ids.first { watch(id) }
         }
         .onChange(of: model.clips) {
             // Clip numbers are reassigned when filters or lengths change, so an
@@ -395,7 +471,7 @@ private struct ResultsView: View {
         }
         .onKeyPress(.space) {
             guard let selection else { return .ignored }
-            previewing = selection
+            watch(selection)
             return .handled
         }
         .overlay {
@@ -412,32 +488,180 @@ private struct ResultsView: View {
     private var footer: some View {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
-                Text("\(AppModel.count(model.clips.count, "clip")) · \(Format.clock(model.totalClipSeconds)) of footage")
+                Text(tickedSummary)
                     .monospacedDigit()
-                Text(model.notice ?? (model.clips.isEmpty ? " " : "Double-click a clip to watch it here."))
+                Text(model.notice ?? (model.clips.isEmpty ? " " : "Double-click a clip to watch it. Untick any you don't want."))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
             }
             Spacer()
-            if model.losslessCutURL == nil {
-                Button("Get LosslessCut") { model.getLosslessCut() }
-                    .help("LosslessCut is the free app PhamVision uses to cut and export your clips")
+            Menu("Tick") {
+                Button("Tick All") { model.keepOnly(minStars: 1) }
+                Button("Tick ★★ and Up Only") { model.keepOnly(minStars: 2) }
+                Button("Tick ★★★ Only") { model.keepOnly(minStars: 3) }
+                Divider()
+                Button("Untick All") { model.untickAll() }
             }
-            Button("Save CSV…") { model.saveCSV() }
+            .fixedSize()
+            .disabled(model.clips.isEmpty)
+            .help("Choose which clips to keep by rating")
+            Menu("More") {
+                Button("Review in LosslessCut") { model.reviewInLosslessCut() }
+                    .disabled(model.clips.isEmpty)
+                if model.losslessCutURL == nil {
+                    Button("Get LosslessCut…") { model.getLosslessCut() }
+                }
+                Divider()
+                Button("Save Clip List as CSV…") { model.saveCSV() }
+                    .disabled(model.keptClips.isEmpty)
+            }
+            .fixedSize()
+            .help("Fine-tune clips in LosslessCut, or save the clip list as a spreadsheet")
+            Button("Save CSV") { model.saveCSV() }
                 .keyboardShortcut("s")
-                .disabled(model.clips.isEmpty)
-                .help("Save the clip list as a spreadsheet file (⌘S)")
-            Button("Review in LosslessCut") { model.reviewInLosslessCut() }
+                .frame(width: 0, height: 0)
+                .opacity(0)
+                .accessibilityHidden(true)
+            Button("Export Reel…") { model.exportReel() }
+                .disabled(model.keptClips.isEmpty)
+                .help("Join the ticked clips into one highlight video, in the order shown")
+            Button("Export Clips…") { model.exportClips() }
                 .buttonStyle(.borderedProminent)
                 .tint(Brand.teal)
                 .foregroundStyle(.black)
                 .keyboardShortcut(.defaultAction)
-                .disabled(model.clips.isEmpty)
-                .help("Save the clip list next to the recording and open it in LosslessCut")
+                .disabled(model.keptClips.isEmpty)
+                .help("Save each ticked clip as its own MP4, at full quality")
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 12)
+    }
+}
+
+extension ResultsView {
+    fileprivate var tickedSummary: String {
+        let total = model.clips.count
+        let ticked = model.keptClips.count
+        let length = Format.clock(model.keptSeconds)
+        if ticked == total { return "\(AppModel.count(total, "clip")) · \(length) of footage" }
+        return "\(ticked) of \(AppModel.count(total, "clip")) ticked · \(length) of footage"
+    }
+}
+
+// MARK: - Ratings, accuracy and export progress
+
+/// One to three stars.
+private struct StarsView: View {
+    let count: Int
+
+    var body: some View {
+        HStack(spacing: 1) {
+            ForEach(0..<3, id: \.self) { i in
+                Image(systemName: i < count ? "star.fill" : "star")
+                    .font(.system(size: 10))
+                    .foregroundStyle(i < count ? Brand.orange : Color.secondary.opacity(0.4))
+            }
+        }
+        .accessibilityElement()
+        .accessibilityLabel("\(count) of 3 stars")
+        .help(count == 3 ? "One of the best clips in this recording" : count == 2 ? "A good clip" : "A routine play")
+    }
+}
+
+/// Each game's plays compared with how much its stat line went up.
+private struct AccuracyDetails: View {
+    @Environment(AppModel.self) private var model
+    @Environment(\.dismiss) private var dismiss
+    let watch: (GameSummary.Gap, GameSummary) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Accuracy check")
+                .font(.title3.weight(.semibold))
+            Text("For each game, PhamVision adds up the plays it found and compares the total with how much your stat line went up.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            ForEach(model.gameChecks, id: \.index) { game in
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 6) {
+                        Image(systemName: game.checksOut ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                            .foregroundStyle(game.checksOut ? Brand.teal : Brand.orange)
+                            .accessibilityHidden(true)
+                        Text(game.title).font(.subheadline.weight(.semibold))
+                        Text(totals(game))
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                            .monospacedDigit()
+                    }
+                    ForEach(problems(game), id: \.self) { line in
+                        Text(line)
+                            .font(.callout)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    ForEach(Array(game.gaps.enumerated()), id: \.offset) { _, gap in
+                        HStack {
+                            Text("\(gap.unit) went from \(gap.from) to \(gap.to) between \(Format.clock(gap.after)) and \(Format.clock(gap.before)), while the stat line was hidden.")
+                                .font(.callout)
+                                .fixedSize(horizontal: false, vertical: true)
+                            Spacer(minLength: 8)
+                            Button("Watch") { watch(gap, game) }
+                        }
+                    }
+                }
+            }
+            Text("Steals and blocks come from the event feed, so they aren't part of this check.")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+            HStack {
+                Spacer()
+                Button("Done") { dismiss() }
+                    .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(22)
+        .frame(width: 480)
+    }
+
+    /// "35 PTS · 3 REB · 14 AST"
+    private func totals(_ game: GameSummary) -> String {
+        game.stats.map { "\($0.expected) \($0.unit)" }.joined(separator: " · ")
+    }
+
+    private func problems(_ game: GameSummary) -> [String] {
+        game.stats.compactMap { stat in
+            if stat.missing > 0 {
+                return "\(stat.missing) of \(stat.expected) \(stat.unit) didn't become a clip."
+            }
+            if stat.missing < 0 {
+                return "PhamVision found \(-stat.missing) more \(stat.unit) than the stat line went up, so a clip may be listed twice."
+            }
+            return nil
+        }
+    }
+}
+
+/// Shown while clips are being saved.
+private struct ExportProgressView: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        VStack(spacing: 14) {
+            Text(model.exportTitle)
+                .font(.headline)
+            ProgressView(value: model.exportProgress ?? 0)
+                .tint(Brand.teal)
+                .frame(width: 320)
+                .accessibilityLabel("Export progress")
+            Text("\(Int(((model.exportProgress ?? 0) * 100).rounded()))%")
+                .monospacedDigit()
+                .foregroundStyle(.secondary)
+            Button("Stop") { model.cancelExport() }
+                .keyboardShortcut(.cancelAction)
+        }
+        .padding(28)
+        .interactiveDismissDisabled()
     }
 }
 

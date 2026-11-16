@@ -106,3 +106,56 @@ private func play(_ t: Double, _ kind: PlayKind = .points, game: Int = 1) -> Pla
     #expect(Remuxer.needsRemux(URL(fileURLWithPath: "/x/Stream.MKV")))
     #expect(!Remuxer.needsRemux(URL(fileURLWithPath: "/x/stream.mp4")))
 }
+
+private func rated(_ kind: PlayKind, amount: Int = 2, clock: String? = nil, margin: Int? = nil, detail: String = "") -> Clip {
+    Clip(id: 0, start: 0, end: 15, plays: [
+        Play(id: 1, time: 12, kind: kind, detail: detail, game: 1, clock: clock, amount: amount, scoreMargin: margin),
+    ])
+}
+
+@Test func lateCloseThreeOutranksEarlyLayup() {
+    let early = rated(.points, amount: 2, clock: "1st 4:00", margin: 2)
+    let clutch = rated(.points, amount: 3, clock: "4th 0:40", margin: 2)
+    #expect(ClipRating.excitement(clutch) > ClipRating.excitement(early) * 2)
+    #expect(ClipRating.isClutch(clutch))
+    #expect(!ClipRating.isClutch(early))
+}
+
+@Test func blowoutIsNotClutch() {
+    #expect(!ClipRating.isClutch(rated(.points, amount: 3, clock: "4th 0:40", margin: 25)))
+}
+
+@Test func starsSpreadAcrossClips() {
+    var clips = (0..<10).map { i in rated(.points, amount: i < 2 ? 3 : 2, clock: i < 2 ? "4th 0:30" : "1st 3:00", margin: 3) }
+    for i in clips.indices { clips[i].id = i + 1 }
+    let stars = ClipRating.stars(clips)
+    #expect(stars[1] == 3 && stars[2] == 3)
+    #expect(stars.values.filter { $0 == 3 }.count == 2)
+    #expect(stars.values.filter { $0 == 1 }.count == 4)
+}
+
+@Test func scoreboardMarginAndClockParsing() {
+    #expect(Scoreboard(clock: nil, leftScore: 62, rightScore: 71).margin == 9)
+    #expect(Scoreboard(clock: nil, leftScore: 62, rightScore: nil).margin == nil)
+    #expect(GameClock.secondsLeft("4th 1:07") == 67)
+    #expect(GameClock.secondsLeft("3rd") == nil)
+}
+
+@Test func exportFileNamesAreSafeAndOrdered() {
+    let clip = Clip(id: 3, start: 0, end: 15, plays: [
+        Play(id: 1, time: 12, kind: .points, detail: "+3 PTS (18 → 21)", game: 2, clock: "4th 0:57", amount: 3),
+        Play(id: 2, time: 13, kind: .feed, detail: "Steal", game: 2),
+    ])
+    let name = ClipExporter.fileName(for: clip, number: 3, of: 66, stars: 3)
+    #expect(name == "03 G2 4th 0.57 +3 PTS + Steal ★★★")
+    #expect(!name.contains(":") && !name.contains("/"))
+}
+
+@Test func losslessCutProjectMarksUntickedClips() throws {
+    let clips = ClipBuilder.build([play(100), play(300, .assist)], settings: ClipSettings(), videoDuration: 1000)
+    let data = try LosslessCut.project(for: clips, mediaFileName: "s.mp4", stars: [1: 3], selected: { $0.id == 1 })
+    let json = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+    let segments = try #require(json["cutSegments"] as? [[String: Any]])
+    #expect(segments.map { $0["selected"] as? Bool } == [true, false])
+    #expect((segments[0]["name"] as? String)?.hasPrefix("★★★ ") == true)
+}

@@ -126,6 +126,21 @@ final class AppModel {
         }
     }
     private(set) var clips: [Clip] = []
+    /// Each game's plays checked against its final stat line.
+    private(set) var gameChecks: [GameSummary] = []
+    /// 1 to 3 stars per clip, relative to the other clips in this recording.
+    private(set) var stars: [Clip.ID: Int] = [:]
+    /// Plays the user unticked. Stored by play rather than clip, because clips
+    /// are rebuilt and renumbered whenever the filters or clip length change.
+    private(set) var excludedPlays: Set<Int> = []
+    /// Show the highest-rated clips first instead of in recording order.
+    var bestFirst = UserDefaults.standard.bool(forKey: "sortBestFirst") {
+        didSet { UserDefaults.standard.set(bestFirst, forKey: "sortBestFirst") }
+    }
+    /// 0...1 while clips are being saved.
+    private(set) var exportProgress: Double?
+    private(set) var exportTitle = ""
+    private var exportTask: Task<Void, Never>?
     var notice: String?
     /// Set when exporting would replace a LosslessCut project that already exists.
     var pendingOverwrite: URL?
@@ -133,8 +148,10 @@ final class AppModel {
     /// LosslessCut's location, refreshed whenever PhamVision comes to the front
     /// so installing it mid-session is picked up.
     private(set) var losslessCutURL: URL?
-    /// The clips as they were when last sent to LosslessCut or saved as CSV.
+    /// The clips and ticks as they were when last sent to LosslessCut, saved
+    /// as CSV or exported.
     private var savedClips: [Clip]?
+    private var savedExcluded: Set<Int>?
 
     private var task: Task<Void, Never>?
     /// Bumped for every scan so a cancelled one can never overwrite a newer one's state.
@@ -215,13 +232,21 @@ final class AppModel {
 
     private var unsavedExplanation: String {
         let what = savedClips == nil
-            ? "You haven't opened the clips from \(quoted(video)) in LosslessCut or saved them as a CSV."
-            : "You've changed the clips from \(quoted(video)) since you last opened them in LosslessCut or saved them."
+            ? "You haven't exported the clips from \(quoted(video)), opened them in LosslessCut or saved them as a CSV."
+            : "You've changed the clips from \(quoted(video)) since you last exported or saved them."
         return what + " Getting them back means scanning the recording again, which took \(Format.rough(scanSeconds))."
     }
 
     /// What to ask before quitting, if quitting would lose work.
     var quitConfirmation: Confirmation? {
+        if exportProgress != nil {
+            return Confirmation(
+                title: "Stop saving clips and quit?",
+                message: "The clips saved so far stay where they are. The rest won't be saved.",
+                confirm: "Quit",
+                cancel: "Keep Saving"
+            )
+        }
         switch phase {
         case .scanning:
             return Confirmation(
@@ -242,7 +267,14 @@ final class AppModel {
         }
     }
 
-    var hasUnsavedResults: Bool { phase == .done && !plays.isEmpty && savedClips != clips }
+    var hasUnsavedResults: Bool {
+        phase == .done && !plays.isEmpty && (savedClips != clips || savedExcluded != excludedPlays)
+    }
+
+    private func markSaved() {
+        savedClips = clips
+        savedExcluded = excludedPlays
+    }
 
     private var needsDiscardConfirmation: Bool {
         switch phase {
@@ -301,6 +333,13 @@ final class AppModel {
     private func stopScan() {
         task?.cancel()
         task = nil
+        exportTask?.cancel()
+        exportTask = nil
+        exportProgress = nil
+        gameChecks = []
+        stars = [:]
+        excludedPlays = []
+        savedExcluded = nil
         progress = nil
         endLongWork()
         playable = nil
@@ -352,19 +391,20 @@ final class AppModel {
                 }
             }
             try Task.checkCancellation()
-            var found = await Task.detached(priority: .userInitiated) { PlayDetector().detect(samples) }.value
+            var detection = await Task.detached(priority: .userInitiated) { PlayDetector().analyze(samples) }.value
             try Task.checkCancellation()
 
             guard id == scanID else { return }
-            progress?.begin(.clocks(done: 0, total: found.count))
-            for (index, clock) in try await readClocks(url, at: found.map(\.time), id: id) {
-                found[index].clock = clock
-            }
-            PlayDetector.splitGamesByClock(&found)
+            progress?.begin(.clocks(done: 0, total: detection.plays.count))
+            GameClock.apply(try await readClocks(url, at: detection.plays.map(\.time), id: id), to: &detection.plays)
+            PlayDetector.splitGamesByClock(&detection.plays, games: &detection.games)
             try Task.checkCancellation()
 
             guard id == scanID else { return }
+            let found = detection.plays
             plays = found
+            gameChecks = detection.games
+            excludedPlays = []
             scanSeconds = Date().timeIntervalSince(started)
             rebuild()
             progress = nil
@@ -388,11 +428,12 @@ final class AppModel {
         }
     }
 
-    /// Reads the scoreboard clock for each play in about 20 batches, so the
-    /// progress bar keeps moving and Cancel takes effect quickly. Each play's
-    /// clock is read on its own either way, so batching doesn't change the labels.
-    private func readClocks(_ url: URL, at times: [Double], id: Int) async throws -> [Int: String] {
-        var labels: [Int: String] = [:]
+    /// Reads the scoreboard (clock and score) for each play in about 20 batches,
+    /// so the progress bar keeps moving and Cancel takes effect quickly. Each
+    /// play's scoreboard is read on its own either way, so batching doesn't
+    /// change the results.
+    private func readClocks(_ url: URL, at times: [Double], id: Int) async throws -> [Int: Scoreboard] {
+        var labels: [Int: Scoreboard] = [:]
         let batch = max(8, (times.count + 19) / 20)
         var start = 0
         while start < times.count {
@@ -542,6 +583,159 @@ final class AppModel {
 
     private func rebuild() {
         clips = ClipBuilder.build(plays, settings: settings, videoDuration: duration)
+        stars = ClipRating.stars(clips)
+    }
+
+    /// The clips in the order the list shows them.
+    var shownClips: [Clip] {
+        guard bestFirst else { return clips }
+        return clips.sorted {
+            let a = ClipRating.excitement($0), b = ClipRating.excitement($1)
+            return a != b ? a > b : $0.start < $1.start
+        }
+    }
+
+    // MARK: Ticking clips
+
+    /// A clip is kept unless every play in it was unticked.
+    func isKept(_ clip: Clip) -> Bool { !clip.plays.allSatisfy { excludedPlays.contains($0.id) } }
+
+    func setKept(_ clip: Clip, _ keep: Bool) {
+        for play in clip.plays {
+            if keep { excludedPlays.remove(play.id) } else { excludedPlays.insert(play.id) }
+        }
+    }
+
+    /// Ticks every clip with at least `minStars` stars and unticks the rest.
+    func keepOnly(minStars: Int) {
+        excludedPlays = []
+        for clip in clips where (stars[clip.id] ?? 1) < minStars { setKept(clip, false) }
+    }
+
+    func untickAll() {
+        excludedPlays = Set(plays.map(\.id))
+    }
+
+    /// The ticked clips, in list order.
+    var keptClips: [Clip] { shownClips.filter(isKept) }
+    var keptSeconds: Double { keptClips.reduce(0) { $0 + $1.duration } }
+
+    // MARK: Accuracy check
+
+    /// Games whose plays don't add up to their stat line.
+    var gamesWithGaps: [GameSummary] { gameChecks.filter { !$0.checksOut } }
+
+    /// A clip covering a gap in a game's plays, so it can be watched.
+    func clip(for gap: GameSummary.Gap, in game: GameSummary) -> Clip {
+        let start = max(0, gap.after - 5)
+        let end = min(duration > 0 ? duration : gap.before + 5, min(gap.before + 5, start + 120))
+        let play = Play(
+            id: -1, time: gap.after, kind: gap.kind,
+            detail: "\(gap.unit) \(gap.from) → \(gap.to), not matched to a play", game: game.games.first ?? game.index
+        )
+        return Clip(id: -1, start: start, end: max(end, start + 1), plays: [play])
+    }
+
+    // MARK: Exporting clips
+
+    /// Saves each ticked clip as its own MP4 in a new folder next to where
+    /// the user chooses.
+    func exportClips() {
+        let chosen = keptClips
+        guard let video, let source = playable ?? self.video, !chosen.isEmpty else { return }
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = true
+        panel.directoryURL = video.deletingLastPathComponent()
+        panel.prompt = "Save Clips Here"
+        panel.message = "PhamVision will make a new folder here for the \(Self.count(chosen.count, "clip"))."
+        guard panel.runModal() == .OK, let parent = panel.url else { return }
+        let folder = Self.unused(parent.appendingPathComponent(video.deletingPathExtension().lastPathComponent + " clips"))
+        let ordered = chosen.sorted { $0.start < $1.start }
+        let names = ordered.enumerated().map {
+            ClipExporter.fileName(for: $1, number: $0 + 1, of: ordered.count, stars: stars[$1.id])
+        }
+        runExport(title: "Saving \(Self.count(ordered.count, "clip"))…", result: folder) { progress in
+            _ = try await ClipExporter.exportSeparately(ordered, from: source, to: folder, names: names, progress: progress)
+        } done: {
+            "Saved \(Self.count(ordered.count, "clip")) to “\(folder.lastPathComponent)”."
+        }
+    }
+
+    /// Joins the ticked clips into one video, in the order the list shows them.
+    func exportReel() {
+        let chosen = keptClips
+        guard let video, let source = playable ?? self.video, !chosen.isEmpty else { return }
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.mpeg4Movie]
+        panel.directoryURL = video.deletingLastPathComponent()
+        panel.nameFieldStringValue = video.deletingPathExtension().lastPathComponent + " highlights.mp4"
+        panel.message = "One video of the \(Self.count(chosen.count, "ticked clip")), \(bestFirst ? "best first" : "in recording order")."
+        guard panel.runModal() == .OK, let file = panel.url else { return }
+        runExport(title: "Making a highlight reel of \(Self.count(chosen.count, "clip"))…", result: file) { progress in
+            try await ClipExporter.exportReel(chosen, from: source, to: file, progress: progress)
+        } done: {
+            "Saved “\(file.lastPathComponent)” (\(Format.clock(chosen.reduce(0) { $0 + $1.duration })))."
+        }
+    }
+
+    func cancelExport() {
+        exportTask?.cancel()
+    }
+
+    private func runExport(
+        title: String, result: URL,
+        work: @escaping @MainActor (@escaping @Sendable (Double) -> Void) async throws -> Void,
+        done: @escaping @MainActor () -> String
+    ) {
+        exportTask?.cancel()
+        exportTitle = title
+        exportProgress = 0
+        beginExportActivity()
+        exportTask = Task {
+            defer { self.endExportActivity() }
+            do {
+                try await work { fraction in
+                    Task { @MainActor in
+                        if let current = self.exportProgress, fraction > current { self.exportProgress = fraction }
+                    }
+                }
+                guard exportProgress != nil else { return }
+                exportProgress = nil
+                markSaved()
+                notice = done()
+                NSWorkspace.shared.activateFileViewerSelecting([result])
+            } catch {
+                guard exportProgress != nil else { return }
+                exportProgress = nil
+                notice = error is CancellationError
+                    ? "Stopped saving clips. Any finished ones are in “\(result.lastPathComponent)”."
+                    : "Couldn't save the clips: \((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)"
+            }
+        }
+    }
+
+    private var exportActivity: (any NSObjectProtocol)?
+
+    private func beginExportActivity() {
+        exportActivity = ProcessInfo.processInfo.beginActivity(options: [.userInitiated], reason: "Saving clips")
+    }
+
+    private func endExportActivity() {
+        if let exportActivity { ProcessInfo.processInfo.endActivity(exportActivity) }
+        exportActivity = nil
+    }
+
+    /// `url`, or "url 2", "url 3"… if something already has that name.
+    private static func unused(_ url: URL) -> URL {
+        var candidate = url
+        var n = 2
+        while FileManager.default.fileExists(atPath: candidate.path) {
+            candidate = url.deletingLastPathComponent().appendingPathComponent("\(url.lastPathComponent) \(n)")
+            n += 1
+        }
+        return candidate
     }
 
     // MARK: Clip settings, remembered between launches
@@ -615,18 +809,24 @@ final class AppModel {
             return
         }
         do {
-            try LosslessCut.project(for: clips, mediaFileName: video.lastPathComponent).write(to: project, options: .atomic)
+            try LosslessCut.project(
+                for: shownClips.sorted { $0.start < $1.start }, mediaFileName: video.lastPathComponent,
+                stars: stars, selected: isKept
+            ).write(to: project, options: .atomic)
         } catch {
             notice = "Couldn't save the clip list next to the recording: \(error.localizedDescription)"
             return
         }
-        savedClips = clips
+        markSaved()
         guard let app = losslessCutURL else {
             notice = "Clip list saved next to the recording. Install LosslessCut, then open the recording in it."
             return
         }
         open(video, in: app)
-        notice = "Opened in LosslessCut with \(Self.count(clips.count, "clip")) marked. Untick any you don't want, then click Export."
+        let ticked = keptClips.count
+        notice = ticked == clips.count
+            ? "Opened in LosslessCut with \(Self.count(clips.count, "clip")) marked."
+            : "Opened in LosslessCut with \(Self.count(clips.count, "clip")) marked, \(ticked) ticked."
     }
 
     /// For formats macOS can't read: LosslessCut can re-save them as MP4.
@@ -656,8 +856,9 @@ final class AppModel {
         panel.directoryURL = video.deletingLastPathComponent()
         guard panel.runModal() == .OK, let url = panel.url else { return }
         do {
-            try LosslessCut.csv(for: clips).write(to: url, atomically: true, encoding: .utf8)
-            savedClips = clips
+            try LosslessCut.csv(for: keptClips.sorted { $0.start < $1.start }, stars: stars)
+                .write(to: url, atomically: true, encoding: .utf8)
+            markSaved()
             notice = "Saved “\(url.lastPathComponent)”."
         } catch {
             notice = "Couldn't save the file: \(error.localizedDescription)"

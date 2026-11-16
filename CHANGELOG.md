@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.0.0
+
+The final release.
+
+- **Accuracy check.** After each game, PhamVision compares the plays it found with how much your stat line went up, and lists any stat that rose without becoming a clip, with a Watch button for that stretch.
+- **Best clips first.** Every clip gets one to three stars, and late, close-game plays get a CLUTCH tag. Show the list in recording order or best first, and tick only ★★★ or ★★-and-up clips in one click.
+- **Export from PhamVision.** Save each ticked clip as its own MP4, or join them into one highlight reel, without re-encoding. LosslessCut is now optional (still needed to read MKV).
+- Tick or untick individual clips. Unticked clips are left out of exports and the CSV, and arrive unselected in LosslessCut.
+- The scoreboard's score is read alongside the clock, for the close-game rating.
+- `pv clips` prints ratings and the accuracy check, and can export with `--export`, `--reel` and `--min-stars`.
+
 ## 0.2.1
 
 - Fixed a crash right after "Review in LosslessCut" opened LosslessCut. The clips were saved and LosslessCut opened fine, but PhamVision then quit unexpectedly.

@@ -25,15 +25,93 @@ public struct Play: Sendable, Codable, Equatable, Identifiable {
     public var game: Int
     /// Quarter and game clock when it happened, e.g. "3rd 4:43".
     public var clock: String?
+    /// How much the stat went up: 3 for a three, 1 for an assist or a steal.
+    public var amount: Int
+    /// Points between the two teams on the scoreboard, when it could be read.
+    public var scoreMargin: Int?
 
-    public init(id: Int, time: Double, kind: PlayKind, detail: String, game: Int, clock: String? = nil) {
+    public init(id: Int, time: Double, kind: PlayKind, detail: String, game: Int, clock: String? = nil,
+                amount: Int = 1, scoreMargin: Int? = nil) {
         self.id = id
         self.time = time
         self.kind = kind
         self.detail = detail
         self.game = game
         self.clock = clock
+        self.amount = amount
+        self.scoreMargin = scoreMargin
     }
+}
+
+/// How one game's plays add up against its stat line: the accuracy check.
+public struct GameSummary: Sendable, Equatable {
+    public struct Stat: Sendable, Equatable {
+        public var kind: PlayKind
+        public var unit: String
+        /// The stat when the game (or the recording) started, and when it ended.
+        public var first: Int
+        public var last: Int
+        /// Total of the changes that became plays.
+        public var found: Int
+
+        public init(kind: PlayKind, unit: String, first: Int, last: Int, found: Int) {
+            self.kind = kind
+            self.unit = unit
+            self.first = first
+            self.last = last
+            self.found = found
+        }
+
+        /// How much the stat went up while recording.
+        public var expected: Int { last - first }
+        /// Positive: changes with no play. Negative: more plays than changes.
+        public var missing: Int { expected - found }
+    }
+
+    /// A rise in a stat that couldn't be turned into a play, usually because
+    /// the HUD was hidden for a long time while it happened.
+    public struct Gap: Sendable, Equatable {
+        public var kind: PlayKind
+        public var unit: String
+        public var from: Int
+        public var to: Int
+        /// Last time the old number was on screen, and first time the new one was.
+        public var after: Double
+        public var before: Double
+
+        public init(kind: PlayKind, unit: String, from: Int, to: Int, after: Double, before: Double) {
+            self.kind = kind
+            self.unit = unit
+            self.from = from
+            self.to = to
+            self.after = after
+            self.before = before
+        }
+    }
+
+    /// Detector order, 1-based.
+    public var index: Int
+    /// Game numbers as shown to the user; more than one only when the
+    /// scoreboard showed a new game the stat line didn't.
+    public var games: [Int]
+    public var start: Double
+    public var end: Double
+    public var stats: [Stat]
+    public var gaps: [Gap]
+
+    public var checksOut: Bool { gaps.isEmpty && stats.allSatisfy { $0.missing == 0 } }
+
+    public var title: String {
+        guard let first = games.first else { return "Game \(index)" }
+        guard let last = games.last, last != first else { return "Game \(first)" }
+        return "Games \(first)–\(last)"
+    }
+}
+
+/// Everything the detector found in a recording.
+public struct Detection: Sendable, Equatable {
+    public var plays: [Play]
+    public var games: [GameSummary]
 }
 
 /// Turns raw HUD samples into plays.
@@ -87,9 +165,20 @@ public struct PlayDetector: Sendable {
         var candidate: Int?
         var candidateCount = 0
         var candidateSince = 0.0
+        /// The stat at the start of the current game, and the total of its plays.
+        var first: Int?
+        var found = 0
+        /// Highest value confirmed this game. A rise back up to it after a
+        /// misread drop is a correction, not a missed play.
+        var peak: Int?
     }
 
     public func detect(_ samples: [Sample]) -> [Play] {
+        analyze(samples).plays
+    }
+
+    /// Finds the plays and checks each game's plays against its stat line.
+    public func analyze(_ samples: [Sample]) -> Detection {
         var trackers = [
             Tracker(kind: .points, unit: "PTS", maxStep: 4),
             Tracker(kind: .rebound, unit: "REB", maxStep: 2),
@@ -102,6 +191,20 @@ public struct PlayDetector: Sendable {
         var sawPlayThisGame = false
         var resetCount = 0
         var resetSince = 0.0
+        var summaries: [GameSummary] = []
+        var gaps: [GameSummary.Gap] = []
+        var gameStart = samples.first?.t ?? 0
+
+        func closeGame(at end: Double) {
+            let stats = trackers.compactMap { t -> GameSummary.Stat? in
+                guard let first = t.first else { return nil }
+                return GameSummary.Stat(kind: t.kind, unit: t.unit, first: first, last: t.value ?? first, found: t.found)
+            }
+            guard stats.contains(where: { $0.expected != 0 || $0.found != 0 }) || !gaps.isEmpty else { return }
+            summaries.append(GameSummary(
+                index: summaries.count + 1, games: [game], start: gameStart, end: end, stats: stats, gaps: gaps
+            ))
+        }
 
         for sample in samples {
             guard let stats = sample.stats else { continue }
@@ -114,13 +217,20 @@ public struct PlayDetector: Sendable {
                 if resetCount == 0 { resetSince = sample.time }
                 resetCount += 1
                 if resetCount >= resyncConfirmations {
-                    if sawPlayThisGame {
+                    let changed = trackers.contains { $0.first != nil && $0.value != $0.first }
+                    closeGame(at: resetSince)
+                    if sawPlayThisGame || changed {
                         game += 1
                         gameStarts.append((resetSince, game))
                     }
                     sawPlayThisGame = false
+                    gaps = []
+                    gameStart = resetSince
                     for i in trackers.indices {
                         trackers[i].value = readings[i]
+                        trackers[i].first = readings[i]
+                        trackers[i].peak = readings[i]
+                        trackers[i].found = 0
                         trackers[i].lastSeen = sample.time
                         trackers[i].candidate = nil
                         trackers[i].candidateCount = 0
@@ -140,6 +250,8 @@ public struct PlayDetector: Sendable {
                     advance(&t, read, at: sample.time)
                     if t.candidateCount >= confirmations {
                         t.value = read
+                        if t.first == nil { t.first = read }
+                        t.peak = max(t.peak ?? read, read)
                         t.candidate = nil
                         t.lastSeen = sample.time
                     }
@@ -158,13 +270,23 @@ public struct PlayDetector: Sendable {
                     guard t.candidateCount >= confirmations else { continue }
                     plays.append(Play(
                         id: 0, time: min(t.candidateSince, t.lastSeen + replayLeadSeconds), kind: t.kind,
-                        detail: "+\(step) \(t.unit) (\(current) → \(read))", game: game
+                        detail: "+\(step) \(t.unit) (\(current) → \(read))", game: game, amount: step
                     ))
+                    t.found += step
+                    t.peak = max(t.peak ?? read, read)
                     sawPlayThisGame = true
                 } else {
                     // A drop or an impossible jump: after enough agreeing reads,
                     // accept it as the new baseline without making a play.
                     guard t.candidateCount >= resyncConfirmations else { continue }
+                    let peak = t.peak ?? current
+                    if read > peak {
+                        gaps.append(GameSummary.Gap(
+                            kind: t.kind, unit: t.unit, from: max(current, peak), to: read,
+                            after: t.lastSeen, before: t.candidateSince
+                        ))
+                        t.peak = read
+                    }
                 }
                 t.value = read
                 t.candidate = nil
@@ -173,10 +295,22 @@ public struct PlayDetector: Sendable {
             }
         }
 
+        closeGame(at: samples.last?.t ?? gameStart)
+
         plays.append(contentsOf: feedPlays(samples, gameStarts: gameStarts))
         plays.sort { $0.time < $1.time }
         for i in plays.indices { plays[i].id = i + 1 }
-        return plays
+        return Detection(plays: plays, games: summaries)
+    }
+
+    /// `splitGamesByClock` for plays and their game summaries together: each
+    /// summary takes the game numbers of the plays inside it.
+    public static func splitGamesByClock(_ plays: inout [Play], games: inout [GameSummary]) {
+        splitGamesByClock(&plays)
+        for i in games.indices {
+            let numbers = Set(plays.filter { $0.time >= games[i].start && $0.time <= games[i].end }.map(\.game))
+            if !numbers.isEmpty { games[i].games = numbers.sorted() }
+        }
     }
 
     /// Starts a new game wherever the quarter goes backwards between two

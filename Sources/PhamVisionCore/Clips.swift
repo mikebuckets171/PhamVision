@@ -19,6 +19,13 @@ public struct Clip: Sendable, Codable, Equatable, Identifiable {
     public var end: Double
     public var plays: [Play]
 
+    public init(id: Int, start: Double, end: Double, plays: [Play]) {
+        self.id = id
+        self.start = start
+        self.end = end
+        self.plays = plays
+    }
+
     public var duration: Double { end - start }
 
     /// "G2 3rd 4:43 · Assist +1 AST (9 → 10)"

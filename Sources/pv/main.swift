@@ -14,7 +14,8 @@ import PhamVisionCore
 func usage() -> Never {
     FileHandle.standardError.write(Data("""
     usage:
-      pv clips <video> [--before S] [--after S] [--csv 1] [--force 1]
+      pv clips <video> [--before S] [--after S] [--csv 1] [--force 1] [--scan saved.jsonl]
+                       [--export DIR] [--reel FILE.mp4] [--min-stars N]
       pv scan <video> [--from S] [--to S] > scan.jsonl
       pv plays <scan.jsonl>
       pv info <video>
@@ -28,6 +29,11 @@ guard rawArgs.count >= 2 else { usage() }
 let command = rawArgs[0]
 let url = URL(fileURLWithPath: (rawArgs[1] as NSString).expandingTildeInPath)
 let args = Array(rawArgs.dropFirst(2))
+
+func stringOption(_ name: String) -> String? {
+    guard let i = args.firstIndex(of: name), i + 1 < args.count else { return nil }
+    return (args[i + 1] as NSString).expandingTildeInPath
+}
 
 func option(_ name: String) -> Double? {
     guard let i = args.firstIndex(of: name), i + 1 < args.count else { return nil }
@@ -104,31 +110,69 @@ do {
         }
         defer { if source != url { try? FileManager.default.removeItem(at: source) } }
         let info = try await VideoSampler(url: source).info()
-        let samples = try await VideoScanner().scan(source) { p in
-            FileHandle.standardError.write(Data(String(format: "\rScanning %3.0f%%", p * 100).utf8))
+        let samples: [Sample]
+        if let saved = stringOption("--scan") {
+            let decoder = JSONDecoder()
+            samples = try String(contentsOfFile: saved, encoding: .utf8).split(separator: "\n").map {
+                try decoder.decode(Sample.self, from: Data($0.utf8))
+            }
+        } else {
+            samples = try await VideoScanner().scan(source) { p in
+                FileHandle.standardError.write(Data(String(format: "\rScanning %3.0f%%", p * 100).utf8))
+            }
+            stderr("")
         }
-        stderr("")
-        var plays = PlayDetector().detect(samples)
-        for (index, clock) in await GameClock.read(source, at: plays.map(\.time)) { plays[index].clock = clock }
-        PlayDetector.splitGamesByClock(&plays)
+        var detection = PlayDetector().analyze(samples)
+        GameClock.apply(await GameClock.read(source, at: detection.plays.map(\.time)), to: &detection.plays)
+        PlayDetector.splitGamesByClock(&detection.plays, games: &detection.games)
+        let plays = detection.plays
         var settings = ClipSettings()
         if let b = option("--before") { settings.before = b }
         if let a = option("--after") { settings.after = a }
         let clips = ClipBuilder.build(plays, settings: settings, videoDuration: info.duration)
+        let stars = ClipRating.stars(clips)
         for clip in clips {
-            print(String(format: "%8.1f %6.1fs  %@", clip.start, clip.duration, clip.label))
+            let rating = String(repeating: "★", count: stars[clip.id] ?? 1).padding(toLength: 3, withPad: " ", startingAt: 0)
+            let margin = clip.plays.first?.scoreMargin.map { "±\($0)" } ?? "  "
+            let clutch = ClipRating.isClutch(clip) ? " CLUTCH" : ""
+            print(String(format: "%8.1f %6.1fs %@ %4.1f %@  %@%@", clip.start, clip.duration, rating,
+                         ClipRating.excitement(clip), margin, clip.label, clutch))
+        }
+        stderr("")
+        for game in detection.games {
+            let totals = game.stats.map { "\($0.found)/\($0.expected) \($0.unit)" }.joined(separator: ", ")
+            stderr("\(game.title): \(game.checksOut ? "checks out" : "DOESN'T ADD UP") (\(totals))")
+            for gap in game.gaps {
+                stderr(String(format: "  gap: %@ %d → %d between %.1f and %.1f", gap.unit, gap.from, gap.to, gap.after, gap.before))
+            }
         }
         let project = LosslessCut.projectURL(for: url)
         if FileManager.default.fileExists(atPath: project.path), option("--force") == nil {
             stderr("\(project.lastPathComponent) already exists; pass --force 1 to replace it")
         } else {
-            try LosslessCut.project(for: clips, mediaFileName: url.lastPathComponent).write(to: project, options: .atomic)
+            try LosslessCut.project(for: clips, mediaFileName: url.lastPathComponent, stars: stars)
+                .write(to: project, options: .atomic)
             stderr("Wrote \(project.path)")
         }
         if option("--csv") != nil {
             let csv = url.deletingPathExtension().appendingPathExtension("clips.csv")
-            try LosslessCut.csv(for: clips).write(to: csv, atomically: true, encoding: .utf8)
+            try LosslessCut.csv(for: clips, stars: stars).write(to: csv, atomically: true, encoding: .utf8)
             stderr("Wrote \(csv.path)")
+        }
+        let minStars = Int(option("--min-stars") ?? 1)
+        let chosen = clips.filter { (stars[$0.id] ?? 1) >= minStars }
+        if let folder = stringOption("--export") {
+            let names = chosen.enumerated().map {
+                ClipExporter.fileName(for: $1, number: $0 + 1, of: chosen.count, stars: stars[$1.id])
+            }
+            let t0 = Date()
+            let files = try await ClipExporter.exportSeparately(chosen, from: source, to: URL(fileURLWithPath: folder), names: names)
+            stderr(String(format: "Exported %d clips to %@ in %.1fs", files.count, folder, Date().timeIntervalSince(t0)))
+        }
+        if let reel = stringOption("--reel") {
+            let t0 = Date()
+            try await ClipExporter.exportReel(chosen, from: source, to: URL(fileURLWithPath: reel))
+            stderr(String(format: "Exported a %d-clip reel to %@ in %.1fs", chosen.count, reel, Date().timeIntervalSince(t0)))
         }
         stderr(String(format: "%d plays, %d clips, %.0f min of video scanned in %.0fs", plays.count, clips.count,
                       info.duration / 60, Date().timeIntervalSince(started)))
@@ -180,7 +224,9 @@ do {
     case "clock":
         // pv clock <video> --at T   reads the scoreboard clock at T
         guard let at = option("--at") else { usage() }
-        print(await GameClock.read(url, at: [at])[0] ?? "(no clock)")
+        let board = await GameClock.read(url, at: [at])[0]
+        let left = board?.leftScore.map(String.init) ?? "-", right = board?.rightScore.map(String.init) ?? "-"
+        print("clock: \(board?.clock ?? "-")  score: \(left)–\(right)")
 
     case "plays":
         // pv plays <samples.jsonl> [--before S] [--after S] [--duration S]

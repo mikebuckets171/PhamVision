@@ -5,7 +5,12 @@ public enum LosslessCut {
     /// LosslessCut's project file (format version 2, checked against
     /// LosslessCut's `llcProjectV2Schema`). Saved next to the video as
     /// `<video name>-proj.llc`, it loads automatically when the video is opened.
-    public static func project(for clips: [Clip], mediaFileName: String) throws -> Data {
+    /// `stars` adds a rating to each segment's name; `selected` decides which
+    /// segments LosslessCut exports (all by default).
+    public static func project(
+        for clips: [Clip], mediaFileName: String,
+        stars: [Clip.ID: Int] = [:], selected: (Clip) -> Bool = { _ in true }
+    ) throws -> Data {
         struct Segment: Encodable {
             let start: Double
             let end: Double
@@ -21,12 +26,12 @@ public enum LosslessCut {
         }
         let segments = clips.map { clip in
             Segment(
-                start: round3(clip.start), end: round3(clip.end), name: clip.label,
+                start: round3(clip.start), end: round3(clip.end), name: name(clip, stars: stars[clip.id]),
                 tags: [
                     "game": String(clip.plays.first?.game ?? 1),
                     "type": clip.kinds.map(\.rawValue).sorted().joined(separator: "+"),
                 ],
-                selected: true
+                selected: selected(clip)
             )
         }
         let encoder = JSONEncoder()
@@ -39,10 +44,16 @@ public enum LosslessCut {
             .appendingPathComponent(video.deletingPathExtension().lastPathComponent + "-proj.llc")
     }
 
+    /// "★★★ G1 4th 0:57 · Points +3 PTS (18 → 21)"
+    static func name(_ clip: Clip, stars: Int?) -> String {
+        guard let stars else { return clip.label }
+        return String(repeating: "★", count: stars) + " " + clip.label
+    }
+
     /// `start,end,label` rows in seconds, for File → Import project → CSV.
-    public static func csv(for clips: [Clip]) -> String {
+    public static func csv(for clips: [Clip], stars: [Clip.ID: Int] = [:]) -> String {
         clips.map { clip in
-            let label = clip.label.replacingOccurrences(of: "\"", with: "\"\"")
+            let label = name(clip, stars: stars[clip.id]).replacingOccurrences(of: "\"", with: "\"\"")
             return "\(round3(clip.start)),\(round3(clip.end)),\"\(label)\""
         }.joined(separator: "\n") + "\n"
     }

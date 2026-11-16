@@ -18,6 +18,11 @@ public struct HUDLayout: Sendable, Codable, Equatable {
     public var feed: CGRect
     /// The scoreboard's game clock and quarter (Rec / Pro-Am layout).
     public var clock: CGRect
+    /// The whole scoreboard: both team scores either side of the clock.
+    public var scoreboard = CGRect(x: 380, y: 975, width: 420, height: 80)
+    /// Each team's score on its own, for a closer second look at lone digits.
+    public var leftScore = CGRect(x: 440, y: 980, width: 95, height: 55)
+    public var rightScore = CGRect(x: 680, y: 980, width: 95, height: 55)
 
     public static let reference = CGSize(width: 1920, height: 1080)
 
