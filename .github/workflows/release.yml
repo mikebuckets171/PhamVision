@@ -10,7 +10,10 @@ permissions:
 jobs:
   release:
     name: Package and publish
-    runs-on: macos-15
+    # Same Swift generation the app is developed and tested with. Xcode 16's
+    # Swift 6.1 handles some callbacks differently at runtime (that's what
+    # crashed 0.2.0), so a release built there can behave unlike what was tested.
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v5
       - name: Test

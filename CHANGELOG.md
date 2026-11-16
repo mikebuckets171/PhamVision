@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.1
+
+- Fixed a crash right after "Review in LosslessCut" opened LosslessCut. The clips were saved and LosslessCut opened fine, but PhamVision then quit unexpectedly.
+- Fixed the same kind of crash that could happen when a scan finished while PhamVision was in the background and macOS checked whether it may show a notification.
+- Releases are now built with the newer Swift that PhamVision is tested with.
+
 ## 0.2.0
 
 - MKV recordings can be scanned directly, along with FLV and TS. PhamVision makes a temporary MP4 copy using the ffmpeg inside LosslessCut (no re-encoding) and removes it afterwards. LosslessCut still opens your original file.

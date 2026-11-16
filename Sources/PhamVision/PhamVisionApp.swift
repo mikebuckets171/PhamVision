@@ -161,7 +161,9 @@ enum Attention {
     static func askPermission() {
         guard canNotify, !asked else { return }
         asked = true
-        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
+        // Completion handlers from UserNotifications run on a background queue,
+        // so they must be @Sendable (see AppModel.open(_:in:)).
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { @Sendable _, _ in }
     }
 
     /// A sound if PhamVision is in front (only for scans long enough to walk
@@ -176,7 +178,7 @@ enum Attention {
             NSSound(named: "Glass")?.play()
             return
         }
-        UNUserNotificationCenter.current().getNotificationSettings { settings in
+        UNUserNotificationCenter.current().getNotificationSettings { @Sendable settings in
             let allowed = [.authorized, .provisional].contains(settings.authorizationStatus)
             Task { @MainActor in
                 guard allowed else {

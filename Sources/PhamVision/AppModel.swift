@@ -625,21 +625,26 @@ final class AppModel {
             notice = "Clip list saved next to the recording. Install LosslessCut, then open the recording in it."
             return
         }
-        NSWorkspace.shared.open([video], withApplicationAt: app, configuration: NSWorkspace.OpenConfiguration()) { _, error in
-            if let error {
-                Task { @MainActor in self.notice = "Couldn't open LosslessCut: \(error.localizedDescription)" }
-            }
-        }
+        open(video, in: app)
         notice = "Opened in LosslessCut with \(Self.count(clips.count, "clip")) marked. Untick any you don't want, then click Export."
     }
 
     /// For formats macOS can't read: LosslessCut can re-save them as MP4.
     func openVideoInLosslessCut() {
         guard let video, let app = losslessCutURL else { return }
-        NSWorkspace.shared.open([video], withApplicationAt: app, configuration: NSWorkspace.OpenConfiguration()) { _, error in
-            if let error {
-                Task { @MainActor in self.notice = "Couldn't open LosslessCut: \(error.localizedDescription)" }
-            }
+        open(video, in: app)
+    }
+
+    /// Opens the recording in LosslessCut.
+    ///
+    /// macOS calls the completion handler on a background queue. It must be
+    /// `@Sendable`: without that, Swift 6.0 and 6.1 treat a closure written
+    /// here as main-thread-only and crash the app when it's called from
+    /// elsewhere (this crashed 0.2.0 right after LosslessCut opened).
+    private func open(_ video: URL, in app: URL) {
+        NSWorkspace.shared.open([video], withApplicationAt: app, configuration: NSWorkspace.OpenConfiguration()) { @Sendable _, error in
+            guard let message = error?.localizedDescription else { return }
+            Task { @MainActor in self.notice = "Couldn't open LosslessCut: \(message)" }
         }
     }
 
