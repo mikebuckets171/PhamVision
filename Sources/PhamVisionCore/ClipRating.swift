@@ -20,6 +20,10 @@ public enum ClipRating {
         case .assist: return 2
         case .rebound: return 1
         case .feed: return play.detail == "Block" ? 3 : 2.5
+        case .others:
+            // Someone else's basket: worth less than the player's own.
+            let share = play.detail.hasPrefix("Teammate") ? 0.7 : play.detail.hasPrefix("Opponent") ? 0.5 : 0.6
+            return Double(play.amount) * share
         }
     }
 

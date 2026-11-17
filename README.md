@@ -37,6 +37,8 @@ Tools that clip on loud audio fire on every crowd roar and miss the quiet dimes.
 - **Checks its own work.** After each game, PhamVision adds up the plays it found and compares them with how much your stat line went up. If 2 points never became a clip, it says so and lets you watch the stretch where they happened.
 - **Best clips first.** Every clip gets one to three stars. Threes beat free throws, blocks beat rebounds, and plays in the last two minutes of a close 4th quarter count for the most. Those get a **CLUTCH** tag.
 - **Exports in one click.** Save each ticked clip as its own MP4, or join them into one highlight reel. Nothing is re-encoded, so it takes seconds and the quality is exactly the original.
+- **Ready for TikTok.** **Export for TikTok…** turns each ticked clip into a vertical 1080×1920 video: the whole gameplay frame in the middle, a blurred fill behind it and a caption like "+3 PTS · G1 · 4th 0:57" above. About 6 seconds per clip.
+- **Everyone's highlights, when you want them.** PhamVision also follows both team scores, works out which side is yours, and can add teammates' and opponents' baskets ("Teammate +2", "Opponent +3"). Turn on **Others** above the list; it's off by default.
 - **Labels everything:** game number, quarter and game clock, and what happened, e.g. `03 G1 4th 0.57 +3 PTS ★★★.mp4`.
 - **Watch any clip right in the app.** Double-click a row (or press Space) to play just that clip, then step through the rest with the arrow keys.
 - **Clips you can adjust.** 12 seconds before the play and 3 after by default. Back-to-back plays merge into one clip instead of duplicating footage.
@@ -58,7 +60,9 @@ Tools that clip on loud audio fire on every crowd roar and miss the quiet dimes.
 2. **Drop the recording** onto the PhamVision window, or onto its Dock icon.
 3. **Wait a few minutes.** On an M5 Pro, an 89-minute recording takes about 2½ minutes. A 5-hour stream takes roughly 10–20 minutes, depending on your Mac.
 4. **Check the list.** The accuracy check under the file name tells you whether every game added up. Switch the order to **Best first**, use **Tick** to keep only ★★★ clips, or untick any you don't want. Double-click a clip to watch it.
-5. **Click Export Clips…** to save each ticked clip as its own MP4 in a new folder, or **Export Reel…** to get one highlight video in the order shown.
+5. **Click Export Clips…** to save each ticked clip as its own MP4 in a new folder, or **Export for TikTok…** for vertical videos with captions. A single highlight reel is under **More**.
+
+Picked the wrong recording? Click **Choose a Different Recording…** or **Cancel Scan** (Esc) while it scans.
 
 ## How it works
 
@@ -82,6 +86,8 @@ plays ──► clips (12 s before, 3 s after, merged) ──► stars + CLUTCH
 - **Checking the totals.** For each game, the plays' gains are added up and compared with the stat line's first and last values. A stat that rose while the HUD was hidden for too long to place the play is listed as a gap with its time range.
 - **Rating clips.** Each play has a base value (3 for a three, 2 for an assist, 3 for a block). It's weighted up late in the 4th quarter or overtime, up again when the scoreboard shows a close game, and down in blowouts. Stars are relative to the other clips in the same recording.
 - **Exporting.** Clips are copied out of the original file with macOS's own video tools, without re-encoding. Each export was checked frame by frame against the recording and is pixel-identical.
+- **Everyone else's baskets.** Both team scores are read alongside the stat line, but only re-read when the score area changes, so it adds almost nothing to the scan. The player's team is the side whose score rises with their own points and assists; those baskets are already clips, so only the rest are added.
+- **Vertical videos.** Built with Core Image on the Mac's GPU and re-encoded as H.264, since a new frame layout can't be made without re-encoding.
 - **Splitting games.** A new game starts when all your stats reset to zero, or when the quarter on the scoreboard goes backwards.
 - **Reading MKV.** macOS can't open MKV, so PhamVision borrows the ffmpeg that ships inside LosslessCut to copy the video into a temporary MP4, then scans and exports from that.
 
@@ -96,6 +102,7 @@ Two Rec sessions recorded at 1080p60, checked against the HUD at the end of ever
 | Steals and blocks from the feed | 5 | 3 |
 | Time to scan, M5 Pro | 142 s | 156 s |
 | Exported clips | 14 ★★★ clips in 1 s, frame-identical to the recording | 14 clips from inside the app |
+| Others (teammates, opponents) | team side found in all 3 games; 90–96% of opponents' points | team side found in both games; 93% of opponents' points |
 
 The digit templates were built from the first session only, so the second session is unseen footage.
 
@@ -112,7 +119,7 @@ The digit templates were built from the first session only, so the second sessio
 ## Known limits
 
 - Only The Rec has been tested. If another mode puts the HUD or scoreboard somewhere else, PhamVision won't find the stat line there.
-- Plays only count if *your* stat line changes, so a teammate's highlight with no assist from you isn't clipped.
+- Teammates' and opponents' baskets come from the scoreboard, so other highlights (their steals, blocks, rebounds) aren't found, and a basket scored while the scoreboard is hidden can be missed (in testing, about 1 in 10 of the opponents' points). Teammate baskets you assisted are already your assist clips, so they aren't listed twice.
 - The score is occasionally unreadable early in a game (a lone digit during an animation). Those clips just don't get a close-game bonus; late-game scores read reliably.
 - Exported clips start exactly on time in QuickTime and most players. Because nothing is re-encoded, some apps that ignore MP4 edit lists may show a fraction of a second extra at the start.
 - The app isn't notarised, so macOS asks once before opening it.
@@ -123,10 +130,10 @@ PhamVision also comes as a command-line tool, `pv`, for batch jobs or scripting:
 
 ```bash
 swift build -c release
-.build/release/pv clips ~/Movies/stream.mp4 --min-stars 3 --export ~/Movies/best --reel ~/Movies/best.mp4
+.build/release/pv clips ~/Movies/stream.mp4 --min-stars 3 --export ~/Movies/best --tiktok ~/Movies/tiktok
 ```
 
-`pv clips` scans a recording, prints every clip with its rating and the accuracy check, writes a LosslessCut project next to it, and with `--export` / `--reel` saves the clips. Run `.build/release/pv` with no arguments to see the other commands.
+`pv clips` scans a recording, prints every clip with its rating and the accuracy check, writes a LosslessCut project next to it, and with `--export`, `--reel` or `--tiktok` saves the clips. Add `--everyone 1` to include teammates' and opponents' baskets. Run `.build/release/pv` with no arguments to see the other commands.
 
 ## Building from source
 
@@ -136,7 +143,7 @@ Requires Xcode 16 or later.
 git clone https://github.com/mikebuckets171/PhamVision.git
 cd PhamVision
 swift test
-scripts/package.sh 1.0.0
+scripts/package.sh 1.1.0
 open dist/PhamVision.app
 ```
 
@@ -155,6 +162,7 @@ open dist/PhamVision.app
 | `Sources/PhamVisionCore/ClipRating.swift` | Stars and the clutch tag |
 | `Sources/PhamVisionCore/Clips.swift` | Builds and merges clip windows |
 | `Sources/PhamVisionCore/ClipExporter.swift` | Saves clips and reels without re-encoding |
+| `Sources/PhamVisionCore/VerticalExporter.swift` | Vertical TikTok videos with captions |
 | `Sources/PhamVisionCore/Remuxer.swift` | Makes MKV readable through LosslessCut's ffmpeg |
 | `Sources/PhamVisionCore/LosslessCut.swift` | Writes the LosslessCut project and CSV |
 | `Sources/PhamVision/` | The Mac app |

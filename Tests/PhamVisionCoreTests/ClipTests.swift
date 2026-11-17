@@ -159,3 +159,13 @@ private func rated(_ kind: PlayKind, amount: Int = 2, clock: String? = nil, marg
     #expect(segments.map { $0["selected"] as? Bool } == [true, false])
     #expect((segments[0]["name"] as? String)?.hasPrefix("★★★ ") == true)
 }
+
+@Test func verticalCaptions() {
+    let clip = Clip(id: 1, start: 0, end: 15, plays: [
+        Play(id: 1, time: 12, kind: .points, detail: "+3 PTS (18 → 21)", game: 1, clock: "4th 0:57", amount: 3),
+    ])
+    let caption = VerticalExporter.caption(for: clip)
+    #expect(caption.title == "+3 PTS")
+    #expect(caption.detail == "G1 · 4th 0:57")
+    #expect(VerticalExporter.titleSize(for: "+1 AST + Steal + +1 AST") < VerticalExporter.titleSize(for: "+3 PTS"))
+}

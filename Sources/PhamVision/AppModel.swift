@@ -267,6 +267,25 @@ final class AppModel {
         }
     }
 
+    /// A scan or export is still running.
+    var hasBackgroundWork: Bool { phase == .scanning || exportProgress != nil }
+
+    /// Stops any scan or export and waits (up to 3 seconds) for its
+    /// background work to wind down, so quitting never pulls the app out
+    /// from under video decoding or text recognition still in progress.
+    func stopAllWork() async {
+        let running = [task, exportTask].compactMap { $0 }
+        task?.cancel()
+        exportTask?.cancel()
+        await withTaskGroup(of: Void.self) { group in
+            group.addTask { for task in running { await task.value } }
+            group.addTask { try? await Task.sleep(nanoseconds: 3_000_000_000) }
+            await group.next()
+            group.cancelAll()
+        }
+        stopScan()
+    }
+
     var hasUnsavedResults: Bool {
         phase == .done && !plays.isEmpty && (savedClips != clips || savedExcluded != excludedPlays)
     }
@@ -680,6 +699,31 @@ final class AppModel {
         }
     }
 
+    /// Saves each ticked clip as a vertical 1080×1920 video for TikTok,
+    /// Reels and Shorts, in a new folder.
+    func exportVertical() {
+        let chosen = keptClips
+        guard let video, let source = playable ?? self.video, !chosen.isEmpty else { return }
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = true
+        panel.directoryURL = video.deletingLastPathComponent()
+        panel.prompt = "Save Videos Here"
+        panel.message = "PhamVision will make a new folder here with \(Self.count(chosen.count, "vertical video")), ready to post. This takes a few seconds per clip."
+        guard panel.runModal() == .OK, let parent = panel.url else { return }
+        let folder = Self.unused(parent.appendingPathComponent(video.deletingPathExtension().lastPathComponent + " TikToks"))
+        let ordered = bestFirst ? chosen : chosen.sorted { $0.start < $1.start }
+        let names = ordered.enumerated().map {
+            ClipExporter.fileName(for: $1, number: $0 + 1, of: ordered.count, stars: stars[$1.id])
+        }
+        runExport(title: "Making \(Self.count(ordered.count, "vertical video"))…", result: folder) { progress in
+            _ = try await VerticalExporter.export(ordered, from: source, to: folder, names: names, progress: progress)
+        } done: {
+            "Saved \(Self.count(ordered.count, "vertical video")) to “\(folder.lastPathComponent)”."
+        }
+    }
+
     func cancelExport() {
         exportTask?.cancel()
     }
@@ -759,6 +803,8 @@ final class AppModel {
         static let after = "clipSecondsAfter"
         /// Hidden rather than shown kinds, so any new kind of play starts out visible.
         static let hiddenKinds = "hiddenPlayKinds"
+        /// Opt-in kinds (everyone else's baskets) the user turned on.
+        static let shownOptIn = "shownOptInPlayKinds"
     }
 
     nonisolated private static func savedSettings() -> ClipSettings {
@@ -771,7 +817,10 @@ final class AppModel {
             settings.after = min(max(after, afterRange.lowerBound), afterRange.upperBound)
         }
         if let hidden = defaults.stringArray(forKey: DefaultsKey.hiddenKinds) {
-            settings.kinds.subtract(hidden.compactMap(PlayKind.init(rawValue:)))
+            settings.kinds.subtract(hidden.compactMap(PlayKind.init(rawValue:)).filter { !PlayKind.optIn.contains($0) })
+        }
+        if let shown = defaults.stringArray(forKey: DefaultsKey.shownOptIn) {
+            settings.kinds.formUnion(shown.compactMap(PlayKind.init(rawValue:)).filter { PlayKind.optIn.contains($0) })
         }
         return settings
     }
@@ -782,6 +831,8 @@ final class AppModel {
         defaults.set(settings.after, forKey: DefaultsKey.after)
         let hidden = PlayKind.allCases.filter { !settings.kinds.contains($0) }.map(\.rawValue)
         defaults.set(hidden, forKey: DefaultsKey.hiddenKinds)
+        let shownOptIn = PlayKind.optIn.filter { settings.kinds.contains($0) }.map(\.rawValue)
+        defaults.set(shownOptIn, forKey: DefaultsKey.shownOptIn)
     }
 
     // MARK: LosslessCut

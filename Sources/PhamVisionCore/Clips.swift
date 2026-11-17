@@ -7,7 +7,8 @@ public struct ClipSettings: Sendable, Codable, Equatable {
     public var after: Double = 3
     /// Back-to-back plays merge into one clip until it would exceed this.
     public var maxMergedLength: Double = 45
-    public var kinds: Set<PlayKind> = Set(PlayKind.allCases)
+    /// Everyone else's baskets are left out unless asked for.
+    public var kinds: Set<PlayKind> = Set(PlayKind.allCases).subtracting(PlayKind.optIn)
 
     public init() {}
 }

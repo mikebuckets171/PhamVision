@@ -98,8 +98,13 @@ public enum GameClock {
     /// turned grey, contrast-stretched and inverted to dark-on-light first.
     static func readNumber(_ image: CGImage, region: CGRect) -> Int? {
         let size = CGSize(width: image.width, height: image.height)
-        guard let crop = image.cropping(to: HUDLayout.pixels(region, in: size).integral),
-              let clean = enhance(crop) else { return nil }
+        guard let crop = image.cropping(to: HUDLayout.pixels(region, in: size).integral) else { return nil }
+        return readScore(crop: crop)
+    }
+
+    /// Reads the score in a crop of one team's scoreboard panel.
+    static func readScore(crop: CGImage) -> Int? {
+        guard let clean = enhance(crop) else { return nil }
         let request = VNRecognizeTextRequest()
         request.recognitionLevel = .accurate
         request.usesLanguageCorrection = false

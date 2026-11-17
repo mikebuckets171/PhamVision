@@ -6,11 +6,14 @@ public struct Sample: Sendable, Codable, Equatable {
     /// nil when the stat strip wasn't on screen.
     public var stats: HUDReading?
     public var feed: [String]
+    /// Both team scores on the scoreboard, read while the stat line is shown.
+    public var scores: ScoreReading?
 
-    public init(t: Double, stats: HUDReading?, feed: [String] = []) {
+    public init(t: Double, stats: HUDReading?, feed: [String] = [], scores: ScoreReading? = nil) {
         self.t = t
         self.stats = stats
         self.feed = feed
+        self.scores = scores
     }
 }
 
@@ -70,10 +73,14 @@ public struct VideoScanner: Sendable {
                     try await VideoSampler(url: url, samplesPerSecond: rate).run(from: chunk.from) { t, frame in
                         guard t < chunk.to else { return false }
                         try Task.checkCancellation()
+                        let stats = reader.readStats(frame)
                         samples.append(Sample(
                             t: (t * 100).rounded() / 100,
-                            stats: reader.readStats(frame),
-                            feed: try reader.readFeed(frame)
+                            stats: stats,
+                            feed: try reader.readFeed(frame),
+                            // The scoreboard and stat line show and hide together;
+                            // reading it only alongside the stat line skips replays.
+                            scores: stats == nil ? nil : reader.readScores(frame)
                         ))
                         return true
                     }

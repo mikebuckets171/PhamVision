@@ -1,7 +1,8 @@
 import Foundation
 
 public enum PlayKind: String, Codable, Sendable, CaseIterable {
-    case points, assist, rebound, feed
+    /// Baskets by teammates and opponents, from the scoreboard.
+    case points, assist, rebound, feed, others
 
     public var title: String {
         switch self {
@@ -9,8 +10,12 @@ public enum PlayKind: String, Codable, Sendable, CaseIterable {
         case .assist: return "Assist"
         case .rebound: return "Rebound"
         case .feed: return "Highlight"
+        case .others: return "Basket"
         }
     }
+
+    /// Kinds left out unless asked for.
+    public static let optIn: Set<PlayKind> = [.others]
 }
 
 /// A moment worth clipping.
@@ -298,6 +303,7 @@ public struct PlayDetector: Sendable {
         closeGame(at: samples.last?.t ?? gameStart)
 
         plays.append(contentsOf: feedPlays(samples, gameStarts: gameStarts))
+        plays.append(contentsOf: scoreboardPlays(samples, own: plays, gameStarts: gameStarts))
         plays.sort { $0.time < $1.time }
         for i in plays.indices { plays[i].id = i + 1 }
         return Detection(plays: plays, games: summaries)
@@ -352,6 +358,124 @@ public struct PlayDetector: Sendable {
             t.candidateCount = 1
             t.candidateSince = time
         }
+    }
+
+    // MARK: Everyone else's baskets
+
+    /// A team's score going up on the scoreboard.
+    struct ScoreChange {
+        let time: Double
+        let right: Bool
+        let from: Int
+        let to: Int
+        var game = 1
+    }
+
+    /// How close in time a scoreboard change and one of the player's own
+    /// points or assists must be to count as the same basket.
+    static let sameBasketSeconds = 10.0
+
+    /// Baskets by teammates and opponents, read from the scoreboard. The
+    /// player's own team is the side whose score rises with their points and
+    /// assists; those baskets are already plays, so they're skipped here.
+    func scoreboardPlays(_ samples: [Sample], own: [Play], gameStarts: [(time: Double, game: Int)]) -> [Play] {
+        var changes = scoreChanges(samples, right: false) + scoreChanges(samples, right: true)
+        guard !changes.isEmpty else { return [] }
+        for i in changes.indices {
+            changes[i].game = gameStarts.last { $0.time <= changes[i].time + 60 }?.game ?? 1
+        }
+
+        // Match each of the player's own points and assists to the closest
+        // scoreboard change of the right size: that change is the same basket.
+        // First pass: either side, to vote on which side is the player's team.
+        // Second pass: the player's side only, to pick the changes to skip.
+        func match(side: (Int) -> Bool?) -> (matched: Set<Int>, votes: [Int: (left: Int, right: Int)]) {
+            var matched = Set<Int>()
+            var votes: [Int: (left: Int, right: Int)] = [:]
+            for play in own where play.kind == .points || play.kind == .assist {
+                let fits = changes.indices.filter { i in
+                    let c = changes[i], step = c.to - c.from
+                    guard c.game == play.game, !matched.contains(i),
+                          abs(c.time - play.time) <= Self.sameBasketSeconds else { return false }
+                    if let right = side(play.game), right != c.right { return false }
+                    return play.kind == .points ? step == play.amount : step >= 2
+                }
+                guard let best = fits.min(by: { abs(changes[$0].time - play.time) < abs(changes[$1].time - play.time) })
+                else { continue }
+                matched.insert(best)
+                var v = votes[play.game] ?? (0, 0)
+                if changes[best].right { v.right += 1 } else { v.left += 1 }
+                votes[play.game] = v
+            }
+            return (matched, votes)
+        }
+        let votes = match(side: { _ in nil }).votes
+        /// Whether the player's team is on the right, per game; nil if unclear.
+        func mySide(_ game: Int) -> Bool? {
+            let v = votes[game] ?? (0, 0)
+            return v.left == v.right ? nil : v.right > v.left
+        }
+        let matched = match(side: mySide).matched
+
+        var plays: [Play] = []
+        for (index, change) in changes.enumerated() where !matched.contains(index) {
+            let step = change.to - change.from
+            let mine: Bool? = mySide(change.game).map { $0 == change.right }
+            let who: String
+            switch mine {
+            case true?: who = "Teammate"
+            case false?: who = "Opponent"
+            case nil: who = change.right ? "Right team" : "Left team"
+            }
+            plays.append(Play(
+                id: 0, time: change.time, kind: .others,
+                detail: "\(who) +\(step) (\(change.from) → \(change.to))", game: change.game, amount: step
+            ))
+        }
+        return plays
+    }
+
+    /// Rises in one team's score, with the same confirmation rules as the stat line.
+    func scoreChanges(_ samples: [Sample], right: Bool) -> [ScoreChange] {
+        var t = Tracker(kind: .others, unit: "PTS", maxStep: 4)
+        var changes: [ScoreChange] = []
+        for sample in samples {
+            guard let scores = sample.scores, let read = right ? scores.right : scores.left else { continue }
+            guard let current = t.value else {
+                advance(&t, read, at: sample.time)
+                if t.candidateCount >= confirmations {
+                    t.value = read
+                    t.candidate = nil
+                    t.lastSeen = sample.time
+                }
+                continue
+            }
+            if read == current {
+                t.candidate = nil
+                t.candidateCount = 0
+                t.lastSeen = sample.time
+                continue
+            }
+            advance(&t, read, at: sample.time)
+            let step = read - current
+            if step > 0, step <= t.maxStep, t.candidateSince - t.lastSeen <= maxGapSeconds {
+                guard t.candidateCount >= confirmations else { continue }
+                changes.append(ScoreChange(
+                    time: min(t.candidateSince, t.lastSeen + replayLeadSeconds), right: right, from: current, to: read
+                ))
+            } else {
+                // A new game (score back near 0) is accepted quickly. Anything
+                // else needs 10 seconds of agreeing reads, so a stray misread
+                // such as "99" during an animation can't take over.
+                let newGame = read <= 3
+                guard t.candidateCount >= (newGame ? resyncConfirmations : 20) else { continue }
+            }
+            t.value = read
+            t.candidate = nil
+            t.candidateCount = 0
+            t.lastSeen = sample.time
+        }
+        return changes
     }
 
     /// Reduces a feed line to the characters fast text recognition gets

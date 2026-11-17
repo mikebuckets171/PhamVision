@@ -130,9 +130,14 @@ private struct ScanningView: View {
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
             }
-            Button("Cancel") { model.cancelScan() }
-                .padding(.top, 6)
-                .help("Stop scanning and go back")
+            HStack(spacing: 12) {
+                Button("Choose a Different Recording…") { model.chooseFile() }
+                    .help("Picked the wrong file? Choose the right one and PhamVision scans that instead")
+                Button("Cancel Scan") { model.cancelScan() }
+                    .keyboardShortcut(.cancelAction)
+                    .help("Stop scanning and go back (Esc)")
+            }
+            .padding(.top, 6)
             Text("PhamVision keeps your Mac awake while it scans and lets you know when it's done.")
                 .font(.caption)
                 .foregroundStyle(.tertiary)
@@ -336,11 +341,30 @@ private struct ResultsView: View {
         .padding(40)
     }
 
+    /// Filter chips on the left, order and clip length on the right; the
+    /// right-hand group drops to its own row when the window is too narrow.
     private var controls: some View {
-        @Bindable var model = model
-        return HStack(spacing: 22) {
-            HStack(spacing: 8) {
-                ForEach([PlayKind.points, .assist, .rebound, .feed], id: \.self) { kind in
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 18) {
+                filterChips
+                Spacer(minLength: 12)
+                listSettings
+            }
+            VStack(alignment: .leading, spacing: 10) {
+                filterChips
+                HStack(spacing: 18) {
+                    Spacer()
+                    listSettings
+                }
+            }
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 12)
+    }
+
+    private var filterChips: some View {
+        HStack(spacing: 8) {
+                ForEach([PlayKind.points, .assist, .rebound, .feed, .others], id: \.self) { kind in
                     let count = model.count(kind)
                     if count > 0 {
                         let on = model.settings.kinds.contains(kind)
@@ -352,6 +376,8 @@ private struct ResultsView: View {
                                 Text(kind.plural)
                                 Text("\(count)").monospacedDigit().foregroundStyle(.secondary)
                             }
+                            .lineLimit(1)
+                            .fixedSize()
                             .padding(.horizontal, 10)
                             .padding(.vertical, 5)
                             .background(on ? kind.color.opacity(0.22) : Color.clear, in: Capsule())
@@ -366,8 +392,12 @@ private struct ResultsView: View {
                         .accessibilityAddTraits(on ? .isSelected : [])
                     }
                 }
-            }
-            Spacer()
+        }
+    }
+
+    private var listSettings: some View {
+        @Bindable var model = model
+        return HStack(spacing: 18) {
             Picker("Order", selection: $model.bestFirst) {
                 Text("Recording order").tag(false)
                 Text("Best first").tag(true)
@@ -399,8 +429,7 @@ private struct ResultsView: View {
             .accessibilityLabel("Seconds after each play")
             .accessibilityValue("\(Int(model.settings.after))")
         }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 12)
+        .fixedSize()
     }
 
     private var clipList: some View {
@@ -513,19 +542,21 @@ private struct ResultsView: View {
                     Button("Get LosslessCut…") { model.getLosslessCut() }
                 }
                 Divider()
+                Button("Export One Highlight Reel…") { model.exportReel() }
+                    .disabled(model.keptClips.isEmpty)
                 Button("Save Clip List as CSV…") { model.saveCSV() }
                     .disabled(model.keptClips.isEmpty)
             }
             .fixedSize()
-            .help("Fine-tune clips in LosslessCut, or save the clip list as a spreadsheet")
+            .help("A single highlight reel, fine-tuning in LosslessCut, or the clip list as a spreadsheet")
             Button("Save CSV") { model.saveCSV() }
                 .keyboardShortcut("s")
                 .frame(width: 0, height: 0)
                 .opacity(0)
                 .accessibilityHidden(true)
-            Button("Export Reel…") { model.exportReel() }
+            Button("Export for TikTok…") { model.exportVertical() }
                 .disabled(model.keptClips.isEmpty)
-                .help("Join the ticked clips into one highlight video, in the order shown")
+                .help("Make a vertical 1080×1920 video of each ticked clip, with a caption, ready for TikTok, Reels or Shorts")
             Button("Export Clips…") { model.exportClips() }
                 .buttonStyle(.borderedProminent)
                 .tint(Brand.teal)
@@ -807,6 +838,7 @@ extension PlayKind {
         case .assist: return "Assists"
         case .rebound: return "Rebounds"
         case .feed: return "Highlights"
+        case .others: return "Others"
         }
     }
 
@@ -816,6 +848,7 @@ extension PlayKind {
         case .assist: return Brand.teal
         case .rebound: return .blue
         case .feed: return .purple
+        case .others: return .gray
         }
     }
 }

@@ -150,3 +150,36 @@ private func hold(_ p: Int?, _ r: Int?, _ a: Int?, _ n: Int) -> [(Int?, Int?, In
     #expect(detection.games.map(\.title) == ["Game 1", "Game 2"])
     #expect(detection.games.allSatisfy { $0.checksOut })
 }
+
+/// Samples every 0.5 s with a fixed stat line and the given (left, right) scores.
+private func scoreTimeline(_ rows: [(Int, Int, Int, Int)]) -> [Sample] {
+    rows.enumerated().map { i, r in
+        Sample(t: Double(i) * 0.5, stats: HUDReading(points: r.0, rebounds: 0, assists: r.1),
+               scores: ScoreReading(left: r.2, right: r.3))
+    }
+}
+
+private func holdScore(_ pts: Int, _ ast: Int, _ left: Int, _ right: Int, _ n: Int) -> [(Int, Int, Int, Int)] {
+    Array(repeating: (pts, ast, left, right), count: n)
+}
+
+@Test func scoreboardFindsTeammatesAndOpponents() {
+    // Player scores 2 (right side goes up with it), opponent hits a three,
+    // a teammate scores 2 on their own.
+    let rows = holdScore(0, 0, 0, 0, 10) + holdScore(2, 0, 0, 2, 40) + holdScore(2, 0, 3, 2, 40) + holdScore(2, 0, 3, 4, 10)
+    let plays = PlayDetector().detect(scoreTimeline(rows))
+    #expect(plays.map(\.kind) == [.points, .others, .others])
+    #expect(plays[1].detail == "Opponent +3 (0 → 3)")
+    #expect(plays[2].detail == "Teammate +2 (2 → 4)")
+}
+
+@Test func assistedBasketIsNotCountedTwice() {
+    let rows = holdScore(0, 0, 0, 0, 10) + holdScore(0, 1, 0, 2, 10)
+    let plays = PlayDetector().detect(scoreTimeline(rows))
+    #expect(plays.map(\.kind) == [.assist])
+}
+
+@Test func everyoneElseIsOptIn() {
+    #expect(!ClipSettings().kinds.contains(.others))
+    #expect(ClipSettings().kinds.contains(.points))
+}

@@ -16,6 +16,17 @@ public struct HUDReading: Sendable, Codable, Equatable {
     }
 }
 
+/// The two team scores on the scoreboard; nil where a score couldn't be read.
+public struct ScoreReading: Sendable, Codable, Equatable {
+    public var left: Int?
+    public var right: Int?
+
+    public init(left: Int? = nil, right: Int? = nil) {
+        self.left = left
+        self.right = right
+    }
+}
+
 /// Reads the stat strip and the event feed from a frame.
 ///
 /// Stat numbers are read by matching digit shapes (`DigitReader`); the event
@@ -69,6 +80,59 @@ public final class HUDReader: @unchecked Sendable {
             }
         }
         return (count > 0 ? Double(sum) / Double(count) : 0, hi, lo)
+    }
+
+    // MARK: Scoreboard
+
+    /// Per score: the pixels when it was last read, the previous frame's
+    /// pixels, its value, and whether that value came from still pixels.
+    /// Text recognition runs only when the score area has changed since the
+    /// last read (gradual fades add up) or was still moving then, so a read
+    /// taken mid-animation never sticks. Call with frames in order.
+    private struct ScoreCell {
+        var atRead: [UInt8] = []
+        var previous: [UInt8] = []
+        var value: Int?
+        var settled = false
+    }
+    private var scoreCells = [ScoreCell(), ScoreCell()]
+    /// Measured: a score change moves ~400 pixels past this; video noise, under 10.
+    static let scoreThreshold = 24
+
+    public func readScores(_ frame: CVPixelBuffer) -> ScoreReading {
+        var values: [Int?] = []
+        for (i, region) in [layout.leftScore, layout.rightScore].enumerated() {
+            guard let block = Self.lumaBlock(frame, region: region) else {
+                values.append(nil)
+                continue
+            }
+            var cell = scoreCells[i]
+            // Some team colours are close in brightness to their panel, so
+            // score changes need a lower threshold than the stat line.
+            let moving = cell.previous.isEmpty || Self.differs(block.bytes, cell.previous, by: Self.scoreThreshold)
+            if cell.atRead.isEmpty || !cell.settled || Self.differs(block.bytes, cell.atRead, by: Self.scoreThreshold) {
+                cell.value = Self.image(frame, region: region).flatMap(GameClock.readScore(crop:))
+                cell.atRead = block.bytes
+                cell.settled = !moving
+            }
+            cell.previous = block.bytes
+            scoreCells[i] = cell
+            values.append(cell.value)
+        }
+        return ScoreReading(left: values[0], right: values[1])
+    }
+
+    /// True when enough pixels changed by a wide margin to mean new content,
+    /// as opposed to video compression shimmer.
+    static func differs(_ a: [UInt8], _ b: [UInt8], by threshold: Int = 40) -> Bool {
+        guard a.count == b.count, !a.isEmpty else { return true }
+        let needed = max(4, a.count / 200)
+        var count = 0
+        for i in a.indices where abs(Int(a[i]) - Int(b[i])) > threshold {
+            count += 1
+            if count >= needed { return true }
+        }
+        return false
     }
 
     // MARK: Feed

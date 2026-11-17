@@ -39,14 +39,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        guard let question = model?.quitConfirmation else { return .terminateNow }
+        guard let model, let question = model.quitConfirmation else { return .terminateNow }
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = question.title
         alert.informativeText = question.message
         alert.addButton(withTitle: question.cancel)
         alert.addButton(withTitle: question.confirm).hasDestructiveAction = true
-        if alert.runModal() == .alertSecondButtonReturn { return .terminateNow }
+        if alert.runModal() == .alertSecondButtonReturn {
+            guard model.hasBackgroundWork else { return .terminateNow }
+            // Stop the scan or export cleanly before the app exits.
+            Task {
+                await model.stopAllWork()
+                NSApp.reply(toApplicationShouldTerminate: true)
+            }
+            return .terminateLater
+        }
         // Closing the window is what got us here; bring it back.
         if !NSApp.windows.contains(where: { $0.isVisible && $0.canBecomeMain }) { showWindow?() }
         return .terminateCancel

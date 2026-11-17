@@ -9,13 +9,13 @@ import PhamVisionCore
 //   pv scan <video>       raw HUD readings as JSON lines
 //   pv plays <scan.jsonl> run detection over a saved scan
 //   pv templates <video> --labels ...  rebuild the digit templates
-//   pv timeline | info                  tuning helpers
+//   pv timeline | scores | clock | info   tuning helpers
 
 func usage() -> Never {
     FileHandle.standardError.write(Data("""
     usage:
       pv clips <video> [--before S] [--after S] [--csv 1] [--force 1] [--scan saved.jsonl]
-                       [--export DIR] [--reel FILE.mp4] [--min-stars N]
+                       [--export DIR] [--reel FILE.mp4] [--tiktok DIR] [--min-stars N] [--everyone 1]
       pv scan <video> [--from S] [--to S] > scan.jsonl
       pv plays <scan.jsonl>
       pv info <video>
@@ -129,6 +129,7 @@ do {
         var settings = ClipSettings()
         if let b = option("--before") { settings.before = b }
         if let a = option("--after") { settings.after = a }
+        if option("--everyone") != nil { settings.kinds.formUnion(PlayKind.optIn) }
         let clips = ClipBuilder.build(plays, settings: settings, videoDuration: info.duration)
         let stars = ClipRating.stars(clips)
         for clip in clips {
@@ -168,6 +169,14 @@ do {
             let t0 = Date()
             let files = try await ClipExporter.exportSeparately(chosen, from: source, to: URL(fileURLWithPath: folder), names: names)
             stderr(String(format: "Exported %d clips to %@ in %.1fs", files.count, folder, Date().timeIntervalSince(t0)))
+        }
+        if let folder = stringOption("--tiktok") {
+            let names = chosen.enumerated().map {
+                ClipExporter.fileName(for: $1, number: $0 + 1, of: chosen.count, stars: stars[$1.id]) + " vertical"
+            }
+            let t0 = Date()
+            let files = try await VerticalExporter.export(chosen, from: source, to: URL(fileURLWithPath: folder), names: names)
+            stderr(String(format: "Exported %d vertical clips to %@ in %.1fs", files.count, folder, Date().timeIntervalSince(t0)))
         }
         if let reel = stringOption("--reel") {
             let t0 = Date()
@@ -227,6 +236,17 @@ do {
         let board = await GameClock.read(url, at: [at])[0]
         let left = board?.leftScore.map(String.init) ?? "-", right = board?.rightScore.map(String.init) ?? "-"
         print("clock: \(board?.clock ?? "-")  score: \(left)–\(right)")
+
+    case "scores":
+        // pv scores <video> --at T   reads the team scores the way the scanner does
+        guard let at = option("--at") else { usage() }
+        let to = option("--to") ?? at
+        let reader = HUDReader()
+        try await VideoSampler(url: url, samplesPerSecond: 2).run(from: at) { t, frame in
+            let r = reader.readScores(frame)
+            print(String(format: "%.2f  left %@  right %@", t, r.left.map(String.init) ?? "-", r.right.map(String.init) ?? "-"))
+            return t < to
+        }
 
     case "plays":
         // pv plays <samples.jsonl> [--before S] [--after S] [--duration S]

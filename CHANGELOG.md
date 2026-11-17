@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.1.0
+
+- **Export for TikTok.** Turns each ticked clip into a vertical 1080×1920 video with the whole gameplay frame in the middle, a blurred fill behind it and a caption above (e.g. "+3 PTS", "G1 · 4th 0:57"), ready for TikTok, Reels or Shorts.
+- **Everyone else's baskets.** PhamVision now follows both team scores on the scoreboard, works out which side is yours, and can list teammates' and opponents' baskets too ("Teammate +2", "Opponent +3"). Turn on **Others** above the list to include them; it's off by default.
+- **Wrong file?** The scanning screen now has **Choose a Different Recording…** and **Cancel Scan** (Esc).
+- Quitting during a scan or export now stops the background work cleanly before the app closes.
+- The single highlight reel moved to the **More** menu.
+
 ## 1.0.0
 
 The final release.
