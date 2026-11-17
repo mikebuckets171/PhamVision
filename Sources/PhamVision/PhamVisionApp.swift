@@ -1,4 +1,6 @@
+import Combine
 import PhamVisionCore
+import Sparkle
 import SwiftUI
 import UserNotifications
 
@@ -65,6 +67,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 struct PhamVisionApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     @State private var model = AppModel()
+    /// Checks GitHub releases for new versions (daily, and from the menu).
+    /// Only runs in the packaged app, whose Info.plist names the update feed.
+    private let updater = SPUStandardUpdaterController(
+        startingUpdater: Bundle.main.object(forInfoDictionaryKey: "SUFeedURL") != nil,
+        updaterDelegate: nil, userDriverDelegate: nil
+    )
 
     var body: some Scene {
         Window("PhamVision", id: "main") {
@@ -72,6 +80,9 @@ struct PhamVisionApp: App {
         }
         .windowResizability(.contentMinSize)
         .commands {
+            CommandGroup(after: .appInfo) {
+                CheckForUpdatesButton(updater: updater.updater)
+            }
             CommandGroup(replacing: .newItem) {
                 Button("Open Recording…") { model.chooseFile() }
                     .keyboardShortcut("o")
@@ -80,6 +91,31 @@ struct PhamVisionApp: App {
                 Button("Get LosslessCut…") { model.getLosslessCut() }
             }
         }
+    }
+}
+
+/// "Check for Updates…", greyed out while a check is already running.
+private struct CheckForUpdatesButton: View {
+    @ObservedObject private var state: UpdaterState
+    private let updater: SPUUpdater
+
+    init(updater: SPUUpdater) {
+        self.updater = updater
+        state = UpdaterState(updater: updater)
+    }
+
+    var body: some View {
+        Button("Check for Updates…") { updater.checkForUpdates() }
+            .disabled(!state.canCheck)
+    }
+}
+
+@MainActor
+private final class UpdaterState: ObservableObject {
+    @Published var canCheck = false
+
+    init(updater: SPUUpdater) {
+        updater.publisher(for: \.canCheckForUpdates).assign(to: &$canCheck)
     }
 }
 

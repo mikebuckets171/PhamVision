@@ -51,8 +51,10 @@ Tools that clip on loud audio fire on every crowd roar and miss the quiet dimes.
 2. Move **PhamVision.app** to Applications.
 3. *Optional:* install [LosslessCut](https://github.com/mifi/lossless-cut/releases/latest) (free). PhamVision needs it only to read **MKV** recordings, and you can use it to fine-tune clips by hand.
 
+After that, PhamVision keeps itself up to date: it checks once a day and offers new versions with an **Install Update** button (or use **PhamVision → Check for Updates…**). Updates are signed and install without the "Open Anyway" step.
+
 > [!NOTE]
-> PhamVision isn't notarised by Apple, so the first time you open it macOS will say it can't verify the developer. Open **System Settings → Privacy & Security**, scroll down, and click **Open Anyway** next to the PhamVision message. You only need to do this once.
+> PhamVision isn't notarised by Apple, so the first time you open a downloaded copy macOS will say it can't verify the developer. Open **System Settings → Privacy & Security**, scroll down, and click **Open Anyway** next to the PhamVision message. You only need to do this once.
 
 ## How to use it
 
@@ -122,7 +124,7 @@ The digit templates were built from the first session only, so the second sessio
 - Teammates' and opponents' baskets come from the scoreboard, so other highlights (their steals, blocks, rebounds) aren't found, and a basket scored while the scoreboard is hidden can be missed (in testing, about 1 in 10 of the opponents' points). Teammate baskets you assisted are already your assist clips, so they aren't listed twice.
 - The score is occasionally unreadable early in a game (a lone digit during an animation). Those clips just don't get a close-game bonus; late-game scores read reliably.
 - Exported clips start exactly on time in QuickTime and most players. Because nothing is re-encoded, some apps that ignore MP4 edit lists may show a fraction of a second extra at the start.
-- The app isn't notarised, so macOS asks once before opening it.
+- The app isn't notarised, so macOS asks once before opening a downloaded copy. Updates installed from inside the app don't ask.
 
 ## Command line
 
@@ -143,7 +145,7 @@ Requires Xcode 16 or later.
 git clone https://github.com/mikebuckets171/PhamVision.git
 cd PhamVision
 swift test
-scripts/package.sh 1.1.0
+scripts/package.sh 1.2.0
 open dist/PhamVision.app
 ```
 
@@ -178,6 +180,7 @@ Each label is `seconds:PTS,REB,AST`. Between them, the frames need to cover ever
 
 ## Credits
 
+- [Sparkle](https://sparkle-project.org) keeps PhamVision up to date.
 - [LosslessCut](https://github.com/mifi/lossless-cut) by Mikael Finstad: its bundled ffmpeg is how PhamVision reads MKV, and it's there for fine-tuning clips by hand.
 - Built for and named after **onlyphams**, who came up with the stat-line trick.
 

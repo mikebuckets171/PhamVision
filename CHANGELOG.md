@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.2.0
+
+- **Automatic updates.** PhamVision now checks for new versions once a day and shows what's new with an Install Update button. You can also check any time with **PhamVision → Check for Updates…**. Updates install and relaunch in place, without the "Open Anyway" step. This is the last version you need to download by hand.
+- Updates are signed, and PhamVision refuses any update that isn't signed with the PhamVision key.
+
 ## 1.1.0
 
 - **Export for TikTok.** Turns each ticked clip into a vertical 1080×1920 video with the whole gameplay frame in the middle, a blurred fill behind it and a caption above (e.g. "+3 PTS", "G1 · 4th 0:57"), ready for TikTok, Reels or Shorts.
